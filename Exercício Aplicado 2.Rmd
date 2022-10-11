@@ -1,0 +1,284 @@
+---
+title: "Exercício Aplicado 2 - Esthevão Marttioly"
+output:
+  word_document: default
+  pdf_document: default
+date: "2022-08-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importação dos Dados
+
+Primeiramente, é necessário importar as bases de dados para poder gerar o modelo VAR e estimar o VAR estrutural por meio das restrições de sinal igual o paper citado de Uhlig. A base de dados é
+
+```{r readxl}
+rm(list = ls())
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(vars)
+library(VARsignR)
+```
+
+```{r}
+df = read_excel("C:/Users/vfxbl/OneDrive/Área de Trabalho/data_ea2.xlsx")
+df
+```
+
+No paper, Uhlig aplica o logarítmo natural e multiplica por 100 as variáveis que não são datas, federal funds e o spread. Além disso, também é importante citar que os dados que possuímos aqui são trimestrais, enquanto os do paper são mensais construídos a partir de interpolação. Ainda, também possuímos outras variáveis para aumentar a análise feita, no caso, consumo privado, investimento e spread.
+
+Por isso, extraímos duas bases diferentes aqui, uma em que é feita a mudança das variáveis para 100 vezes seu logaritmo e outra em que são retiradas as variáveis citadas anteriormente, para que seja feita a mesma análise do paper. E, então, são plotadas as variáveis para entender seu comportamento.
+
+```{r}
+
+datas = data.frame(df$dates)
+
+df = cbind(data.frame(100*log(df[-c(1,5,10)])), df[c(5,10)])
+
+paper = df[-c(8,9,10)]
+
+df_ts = ts(df, start = c(1965, 1), freq = 4)
+
+par(mfrow = c(3,3))
+
+for (i in 1:ncol(df_ts)) {
+  plot(df_ts[, i], main = colnames(df_ts)[i], xlab = "", ylab = "")
+  abline(h = 0)
+}
+
+
+
+```
+
+# Identificação com restrições de curto prazo
+
+Aqui, é também calculado o VAR caso não seja feito por restrições de sinal mas sim pela modelo utilizado na semana passada, que é o Cholesky. Nesse caso, primeiro estimamos o modelo VAR irrestrito com lags de 4 pois a base é trimestral (Uhlig utiliza lag 12 com base mensal). E, como buscamos estimar o efeito de choque de política monetária, então queremos saber o efeito dos resíduos dos federal funds.
+
+Porém, primeiramente, devemos estabelecer a ordem das variáveis, para isso, deve-se entender qual variável afeta qual e isso fica a cargo da teoria econômica. No caso do paper, as variáveis mais exógenas que os federal funds são o PIB real, o índice de preços e o índice de commodities, enquanto as reservas são endógenas (juros afetam reservas mas as outras variáveis determinam os juros).
+
+Ainda, vale ressaltar que, como buscamos apenas o choque monetário, então a ordem das variáveis no VAR não importa, apenas importa quais variáveis estão antes e quais estão depois dos juros de títulos federais.
+
+```{r, warning=FALSE}
+
+paper = df[c(1,2,3,8,5,4)]
+
+varcholesky = VAR(paper, p = 4, type = "none")
+
+amat = matrix(NA, nrow = 6, ncol = 6)
+amat[1, 2:6] = 0
+amat[2, 3:6] = 0
+amat[3, 4:6] = 0
+amat[4, 5:6] = 0
+amat[5, 6] = 0
+
+svarcholesky = SVAR(varcholesky, Amat = amat)
+
+
+```
+
+```{r, warning=FALSE}
+
+irfchol = irf(svarcholesky, impulse = "ff", n.ahead = 20, boot = T, ci = 0.69, runs = 100)
+
+```
+
+```{r}
+  
+par(mfrow = c(3,2))
+
+for (i in colnames(paper)) {
+
+plot(irfchol$irf$ff[, i], main = paste("Resposta no", i), xlab = "", ylab = "",
+     type = "l", ylim = range(irfchol$irf$ff[, i], irfchol$Lower$ff[, i], irfchol$Upper$ff[, i]))
+lines(irfchol$Lower$ff[, i], col = "blue", lty = "dashed")
+lines(irfchol$Upper$ff[, i], col = "blue", lty = "dashed")
+abline(h = 0)
+}
+
+
+```
+
+A estimativa para a IRF no deflator do PIB mostra o "price puzzle" muito discutido no artigo de Uhlig, em que uma contração da política monetária faz o deflator do PIB subir antes de cair, entretanto, isso não pode ser observado quando tratamos do intervalo de confiança.
+
+# Identificação usando restrições de sinais
+
+Primeiramente, Uhlig busca encontrar o efeito da política monetária contracionária no PIB real e para isso tem que enfrentar o "price puzzle" citado anteriormente. Para ele, os efeitos de uma política monetária de contração são, para x períodos após o choque:
+
+-   Aumento nos juros de fundos federais (+)
+
+-   Diminuição do deflator do PIB (-)
+
+-   Diminuição do índice de commodities (-)
+
+-   Diminuição das reservas não emprestadas (-)
+
+    E ele assume também que esses efeitos permaneçam por 6 meses após o choque, ou seja, 2 trimestres. Para fazer o R entender isso, criamos um vetor que diz o efeito dessa contração sobre cada variável, nesse caso, positivo na variável 4 (ff) e negativo nas variáveis 2, 3 e 5 (pgdp, pcomm, nbres).
+
+```{r echo=TRUE, warning=FALSE}
+
+constr = c(+4, -2, -3, -5)
+
+paper = ts(paper, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.reject(paper, nlags = 4, draws = 200, subdraws = 200, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+
+```
+
+```{r echo=TRUE}
+
+lab = c()
+for (i in 1:ncol(paper)) {
+  lab[i] = c(paste("Resposta no", colnames(paper)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+```
+
+Ao que possamos perceber aqui, um choque monetário contracionário não tem efeito significativo sobre o PIB real, visto que os intervalos de confiança englobam o valor 0 para esse efeito. Isso também foi possível perceber no texto de Uhlig e é um dos seus principais pontos.
+
+# Adicionando consumo e investimento
+
+Agora, também é possível retornar a base de dados completa para verificar os efeitos sobre o consumo e sobre o investimento e também se acrescentar novas variáveis muda o resultado. Primeiramente, deve-se pensar nos efeitos da política monetária sobre essas variáveis:
+
+-   Causa uma diminuição do consumo (-)
+-   Causa uma diminuição do investimento (-)
+
+```{r,warning=FALSE}
+
+df2 = df[c(1,2,3,8,5,4,6,7)]
+
+constr = c(+4, -2, -3, -6, -7, -8)
+
+df2 = ts(df2, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.reject(df2, nlags = 4, draws = 200, subdraws = 200, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+lab = c()
+for (i in 1:ncol(df2)) {
+  lab[i] = c(paste("Resposta no", colnames(df2)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+
+```
+
+Como é possível perceber, a inclusão do consumo e do investimento altera os resultados dados por Uhlig em seu artigo, visto que agora esse choque monetário contracionista passa a afetar negativamente o PIB real. Algo que também podemos fazer três exercícios específicos para testar os resultados, primeiro podemos estabelecer restrições apenas para o consumo:
+
+```{r, warning=FALSE}
+
+df2 = df[c(1,2,3,8,5,4,6,7)]
+
+constr = c(+4, -2, -3, -5, -7)
+
+df2 = ts(df2, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.reject(df2, nlags = 4, draws = 200, subdraws = 200, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+lab = c()
+for (i in 1:ncol(df2)) {
+  lab[i] = c(paste("Resposta no", colnames(df2)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+
+```
+
+Agora, há semelhança com os resultados do Uhlig. E apenas para o investimento:
+
+```{r, warning=FALSE}
+
+df2 = df[c(1,2,3,8,5,4,6,7)]
+
+constr = c(+4, -2, -3, -5, -8)
+
+df2 = ts(df2, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.reject(df2, nlags = 4, draws = 200, subdraws = 200, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+lab = c()
+for (i in 1:ncol(df2)) {
+  lab[i] = c(paste("Resposta no", colnames(df2)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+
+```
+
+E o mesmo acontece. Também adicionar o spread colocando uma restrição de que a política monetária contracionista vai gerar um aumento no spread bancário (+), visto que uma maior taxa de juros causa uma maior dificuldade para pegar dinheiro emprestado e, logo, o spread bancário é maior.
+
+```{r, warning=FALSE}
+
+df2 = df[c(1,2,3,8,5,4,6,7,9)]
+df2 = df2[!is.na(df2$spread),]
+
+constr = c(+4, -2, -3, -5, -6, -7, -8, +9)
+
+df2 = ts(df2, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.reject(df2, nlags = 4, draws = 200, subdraws = 200, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+lab = c()
+for (i in 1:ncol(df2)) {
+  lab[i] = c(paste("Resposta no", colnames(df)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+
+```
+
+Além disso, também podemos utilizar o método de função de punião do Uhlig:
+
+```{r}
+
+df2 = df[c(1,2,3,8,5,4,6)]
+
+constr = c(+4, -2, -3, -5)
+
+df2 = ts(df2, start = c(1965, 1), freq = 4)
+
+svarsign = uhlig.penalty(df2, nlags = 4, draws = 500, subdraws = 500, nkeep = 1000,
+             KMIN = 1, KMAX = 2, constrained = constr, constant = F, steps = 20)
+
+lab = c()
+for (i in 1:ncol(df2)) {
+  lab[i] = c(paste("Resposta no", colnames(df2)[i]))
+}
+
+
+irfplot(irfdraws = svarsign$IRFS, type = "median", labels = lab, save = F,
+        bands = c(0.16, 0.84), grid = T, bw = F)
+
+
+
+```
+
+Em geral, os resultados para o método de função de punição são similares àqueles do método de rejeição. Entretanto, no método de função de punição, o choque de política monetária contracionária tem um efeito positivo e significante sobre o PIB real no curto prazo.

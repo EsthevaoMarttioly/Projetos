@@ -1,0 +1,217 @@
+---
+title: "Exercício Aplicado 4 - Esthevão Marttioly"
+output:
+  pdf_document: default
+date: "2022-08-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importação e entendimento dos dados
+
+Primeiramente, são impostados os dados para o R para que se possa ser possível analisá-los e assim encontrar o efeito da política desejado. Ainda, também é feito um summary para entender os tipos das variáveis e sua distribuição caso sejam numéricas.
+
+```{r readxl, echo = FALSE}
+
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(fixest)
+library(ggplot2)
+
+```
+
+```{r}
+
+load("C:/Users/vfxbl/OneDrive/Área de Trabalho/base_trab1.RData")
+
+df = rename(df_5_sp)
+
+summary(df)
+
+```
+
+Entretanto, como não é possível entender as variáveis que são escritas, também é feita uma análise com base em quais opções têm em cada variável. Como é possível perceber, as variáveis NOMEDEP, NomeDepBol, RegiaoMetropolitana, MUN, SERIE_ANO podem ser descartadas pois só possuem um valor. Além disso, as variáveis de participação apenas possuem o valor 1, então também podem ser desconsideradas.
+
+```{r}
+
+df %>% dplyr::select(NOMEDEP, NomeDepBol, RegiaoMetropolitana, DE, MUN,
+              SERIE_ANO, TURMA, TP_SEXO, PERIODO, NEC_ESP_1, NEC_ESP_2, 
+              Tip_PROVA, nivel_profic_lp, nivel_profic_mat, nivel_profic_cie,
+              classific_cie, classific_mat, classific_cie) %>%
+  apply(2, unique)
+
+
+```
+
+# Aleatorização de indivíduos
+
+Depois disso, é possível realizar a aleatorização do experimento no nível de indivíduos, a fim de entender quais são os dados que farão parte do tratamento e quais farão parte do controle. Para isso, primeiro considerados a seguinte regressão:
+
+$$ Y_i = \alpha + \beta T_i + \varepsilon_i $$
+
+Nesse caso, $\beta$ mede o efeito médio de tratamento (ATE) quando todos os indivíduos colocados no tratamento de fato são tratados e, por isso, calculamos essa regressão para diversos níveis de $beta$, estabelecidos aqui como uma lista entre 0 e 0.4, com diferenças de 0.05.
+
+Ainda, também é feito um modelo condicionando no período de estudo (manhã e tarde) e no tipo de prova realizado (não foi condicionado em gênero pois ele é um efeito fixo). Por fim, é colocada em uma tabela as diferentes proporções de rejeição dos testes de hipótese para diferentes níveis de $beta$:
+
+
+```{r}
+
+set.seed(9812391)
+
+betas = seq(0, 0.4, by = 0.05) # Definição de possíveis betas
+alpha = 0.05 # Nível de significância
+reps = 1000 # Número de Repetições
+
+df2 = copy(df)
+
+mde = lapply(betas, function(x){ # Aplica a regressão em cada um dos betas
+  
+  sim = lapply(1:reps, function(i){ # Realiza 1000 repetições da regressão
+    df2[, treat := rbinom(.N, 1, prob = 0.5)]
+    df2[, y := TOTAL_PONTO_MAT + x * treat]
+    
+    
+    model = feols(y ~ treat + csw0(as.factor(PERIODO), 
+                    as.factor(Tip_PROVA)), data = df2, se = "hetero", lean = TRUE)
+    
+    # Cria uma tabela dizendo se rejeita ou não o teste:
+
+    tab = tibble("rep" = i, 
+                  "reject" = sapply(model, function(x) pvalue(x)["treat"] < alpha),
+                  "model" = c("Model1", "Model2", "Model3"))
+  })
+  sim = setDT(do.call(bind_rows, sim)) 
+  
+  # Por fim, colocamos em uma tabela a proporção de rejeição para cada nível de beta
+  power_table = tibble("ATE" = x,
+                        "Model" = unique(sim$model),
+                        "power" = sapply(unique(sim$model), function(x) nrow(sim[model == x][reject == "TRUE"])/reps))
+  power_table = power_table %>% pivot_wider(names_from = "Model", values_from = "power")
+  power_table
+})
+
+mde <- do.call(bind_rows, mde)
+mde
+
+
+```
+
+Nesse sentido, essa tabela mostra a proporção de hipóteses nulas rejeitadas, de modo que testa-se que o valor estimado de ATE seja igual ao valor do ATE estabelecido na tabela esquerda. Para facilitar a visualização, segue o gráfico seguinte com o nível estabelecido e o poder calculado:
+
+
+```{r}
+
+mde = mde %>% pivot_longer(cols = starts_with("Model"), names_to = "Model", values_to = "Power")
+ggplot(data = mde, aes(x = ATE, y = Power, group = Model)) +
+  geom_line(aes(color = Model)) +
+  geom_point(aes(color = Model, shape = Model)) +
+  theme_bw() +
+  scale_y_continuous(n.breaks = 10) +
+  scale_color_brewer(palette = "Dark2", direction = -1) +
+  labs(title = "Power Function",
+       subtitle = "Significance Level fixed at 5%",
+       x = "Treatment Effect")
+
+```
+
+Ao que se pode perceber, acrescentar modelos faz o poder do teste aumentar, pois os controles reduzem a variância do termo de erro, já que o modelo está melhor especificado. Porém, como o gênero, o período e o tipo da prova não explicam tanto sobre o efeito, então os valores de poder são pouco alterados de um modelo para outro.
+
+# Aleatorização de escolas
+
+Depois disso, também pode-se calcular aleatorizando as escolas:
+
+```{r, warning = FALSE}
+
+set.seed(9812391)
+
+betas = seq(0, 0.5, by = 0.075) # Definição de possíveis betas
+alpha = 0.05 # Nível de significância
+reps = 1000 # Número de Repetições
+
+df2 = copy(df)
+
+mdeschool = lapply(betas, function(x){ # Aplica a regressão em cada um dos betas
+  
+  sim = lapply(1:reps, function(i){ # Realiza 1000 repetições da regressão
+    escolas = tibble("CODESC" = unique(df2$CODESC))
+    setDT(escolas)
+    escolas[, treat := rbinom(.N, 1, prob = 0.5)]
+    df2 = left_join(df2, escolas, by = "CODESC")
+    df2[, y := TOTAL_PONTO_MAT + x * treat]
+    
+    
+    model = feols(y ~ treat + csw0(as.factor(PERIODO), 
+                    as.factor(Tip_PROVA)), data = df2, se = "hetero", lean = TRUE)
+    
+    # Cria uma tabela dizendo se rejeita ou não o teste:
+
+    tab = tibble("rep" = i, 
+                  "reject" = sapply(model, function(x) pvalue(x)["treat"] < alpha),
+                  "model" = c("Model1", "Model2", "Model3"))
+  })
+  sim = setDT(do.call(bind_rows, sim)) 
+  
+  # Por fim, colocamos em uma tabela a proporção de rejeição para cada nível de beta
+  
+  power_table = tibble("ATE" = x,
+                        "Model" = unique(sim$model),
+                        "power" = sapply(unique(sim$model), function(x) nrow(sim[model == x][reject == "TRUE"])/reps))
+  power_table = power_table %>% pivot_wider(names_from = "Model", values_from = "power")
+  power_table
+})
+
+mdeschool <- do.call(bind_rows, mdeschool)
+mdeschool
+
+
+```
+
+Ainda, para visualização, são feitos os gráficos:
+
+```{r}
+
+mdeschool = mdeschool %>% pivot_longer(cols = starts_with("Model"), names_to = "Model", values_to = "Power")
+ggplot(data = mdeschool, aes(x = ATE, y = Power, group = Model)) +
+  geom_line(aes(color = Model)) +
+  geom_point(aes(color = Model, shape = Model)) +
+  theme_bw() +
+  scale_y_continuous(n.breaks = 10) +
+  scale_color_brewer(palette = "Dark2", direction = -1) +
+  labs(title = "Power Function",
+       subtitle = "Significance Level fixed at 5%",
+       x = "Treatment Effect")
+
+```
+
+
+
+# Questão 2
+
+Quando aleatorizamos a nível de escolas, o MDE calculado é maior, pois a variância do estimador de $beta$ também é maior, visto que agora a clusterização faz a variância ser:
+
+$$ MDE^C = (t_{1-\kappa} + t_\alpha) \sqrt{\frac{1}{P(1-P)} \frac{\tau^2+\sigma^2}{nJ}} $$
+Enquanto antes era
+
+$$ MDE^C = (t_{1-\kappa} + t_\alpha) \sqrt{\frac{1}{P(1-P)} \frac{\sigma^2}{nJ}} $$
+
+Por isso, a aleatorização a nível de indivíduos permite uma maior determinação do efeito do tratamento, visto que seu mínimo valor detectável é menore já que a variância do valor estimado é também menor. Nesse sentido, a grande vantagem da aleatorização em indivíduos é uma menor variância e, portanto, um maior poder do teste. Quanto maior a quantidade de clusters, menor a variância.
+
+Entretanto, nessa aleatorização há uma grande chance da amostra ser contaminada devido a externalidades presentes no tratamento. Nesse contexto, quando um aluno é ajudado na matemática básica, ele pode ajudar outros alunos que não foram tratados e por isso há uma externalidade no grupo, além de que pode ocorrer os efeitos Hawthorne e John Henry, pois há incentivos de que os indivíduos se comportem de maneira diferente quando sabem que são tratados ou que não são tratados.
+
+Além disso, a aleatorização de indivíduos também tem uma questão ética, pois muitos não serão tratados nessas escolas, o que dificulta a aprovação desse modelo. Diante disso, eu escolheria a aleatorização no nível de escolas, visto que a questão ética é muito preocupante e que também os efeitos de equilíbrio geral e de externalidade são dificilmente resolvidos para atingir o efeito causal.
+
+# Questão 3
+
+Nesse caso, há um problema de viés de seleção na estimação do nosso efeito. Por isso, não é possível comparar a nota entre as escolas, pois muitos alunos das escolas de controle não possuíram a variável endline, já que mudaram de escolas e esta variável agora tem efeito do tratamento, enquanto alunos de escolas de tratamento tiveram suas variáveis baseline corrompidas por estarem em outras escolas no primeiro momento.
+
+Para contornar isso, é possível criar instrumentos para capturar o efeito da intenção de tratar nesses indivíduos e depois calcular o efeito LATE, que mostra o efeito do tratamento sobre a variável baseline.
+
+
+# Questão 4
+
+Nesse caso, há um problema de atrito na estimação do nosso efeito causal. Nesse caso, alguns alunos das escolas de controle saíram da escola e outros que não faziam escolas foram para as escolas de tratamento. Nesse sentido, há um viés de seleção causado pela falta de obtenção dos dados e não seria possível estabelecer o efeito causal nesse caso.
+
+Para contornar isso, é possível traçar os limites superior e inferior da estimação de $\beta$, ao considerar que os que saíram da amostra foram as menores notas (intervalo superior) e deopis que os que saíram da amostra foram as maiores notas (intervalo inferior). Portanto, nesse caso não é possível achar o efeito causal, mas sim possível estabelecer os limites em que ele pode se encontrar.

@@ -1,0 +1,248 @@
+---
+title: "Exercício Aplicado 3 - Esthevão Marttioly"
+output:
+  pdf_document: default
+date: "2022-08-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importação dos Dados
+
+Primeiramente, é necessário importar as bases de dados para poder gerar o modelo VAR e estimar o VAR estrutural por meio de instrumentos igual o paper citado de Gertle e Karadi. As bases des dados e os instrumentos são
+
+```{r readxl}
+rm(list = ls())
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(vars)
+library(lubridate)
+library(lmtest)
+library(gridExtra)
+library(varexternalinstrument)
+```
+
+```{r}
+df = read_excel("C:/Users/vfxbl/OneDrive/Área de Trabalho/data_ea3.xlsx")
+dfiv = read_excel("C:/Users/vfxbl/OneDrive/Área de Trabalho/data_ea3.xlsx", sheet = "Instruments")
+df
+```
+
+Porém, no paper são utilizamos os perídoos entre Janeiro de 1991 e Junho de 2012 para os instrumentos, por isso, filtramos as bases de dados para estarem nessas datas, como pode ver a seguir:
+
+
+```{r}
+
+df$date = with(df, ymd(paste(year, month, 1, sep = "-")))
+dfiv$date = with(dfiv, ymd(paste(year, month, 1, sep = "-")))
+
+dfiv = dfiv %>% filter(date >= "1991-01-01" & date <= "2012-06-01")
+
+```
+
+Além disso, são feitos os gráficos das variáveis presentes em nossa base de dados total:
+
+```{r}
+
+df[-c(1,2)] %>%
+  pivot_longer(!date) %>%
+  ggplot(aes(x = date, y = value)) +
+  geom_line() +
+  facet_wrap( ~ name, ncol = 3, scales = "free") + 
+  theme_bw()
+
+```
+E também dos instrumentos:
+
+```{r}
+
+
+dfiv[-c(1,2)] %>%
+  pivot_longer(!date) %>%
+  ggplot(aes(x = date, y = value)) +
+  geom_line() +
+  facet_wrap( ~ name, ncol = 3, scales = "free") + 
+  theme_bw()
+
+
+```
+# Identificação do SVAR por Cholesky
+
+Ordenamos as quatro variáveis em que uma têm efeito sobre outra na seguinte ordem, para conseguir fazer o VAR estrutural pela matriz diagonal inferior:
+
+* Logarítmo da produção industrial (logip)
+* Logarítimo do índice de preço do consumidor (logcpi)
+* Taxa de um ano (gs1)
+* Prêmio de excesso de um título (ebp)
+
+
+```{r}
+
+dfvar = df[, c("logip", "logcpi", "gs1", "ebp")]
+var = VAR(dfvar, p = 12, type = "const")
+
+```
+
+Com isso, formando o Cholesky:
+
+```{r}
+
+amat = matrix(NA, 4, 4)
+amat[1, 2:4] = 0
+amat[2, 3:4] = 0
+amat[3,4] = 0
+
+cholesky = SVAR(var, Amat = amat)
+
+
+```
+
+E, plotando a IRF para os efeitos das variáveis na taxa de um ano:
+
+
+```{r, warning = FALSE}
+
+irfchol = irf(cholesky, impulse = "gs1", n.ahead = 40, boot = T, ci = 0.95, runs = 200)
+
+par(mfrow = c(2,2))
+
+for (i in c("gs1", "logcpi", "logip", "ebp")) {
+  plot(irfchol$irf$gs1[, i], main = i,
+     ylab = "", xlab = "", type = "l",
+     ylim = range(irfchol$irf$gs1[, i],
+            irfchol$Lower$gs1[, i],
+            irfchol$Upper$gs1[, i]))
+lines(irfchol$Lower$gs1[, i], col = "blue", lty = "dashed")
+lines(irfchol$Upper$gs1[, i], col = "blue", lty = "dashed")
+abline(h = 0)
+
+}
+
+
+```
+# Utilização de instrumentos para comparar o efeito
+
+Para realizar instumentos igual no paper, primeiramente, no primeiro estágio, regredimos os resíduos associados ao efeito de gs1 nos instrumentos. Para saber que o problema de instrumento fraco não está presente, fazemos testes Fs para cada regressão feita.
+
+
+```{r}
+
+residuals = var$varresult$gs1$residuals
+ultres = length(residuals)
+inires = length(residuals) + 1 - nrow(dfiv)
+
+residuals = residuals[inires:ultres]
+
+lm1 = lm(residuals ~ mp1_tc, dfiv)
+lm2 = lm(residuals ~ ff4_tc, dfiv)
+lm3 = lm(residuals ~ ed4_tc, dfiv)
+lm4 = lm(residuals ~ ff4_tc + ed4_tc, dfiv)
+lm5 = lm(residuals ~ mp1_tc + ff4_tc + ed2_tc + ed3_tc + ed4_tc, dfiv)
+
+
+```
+
+Agora, fazemos os testes F nas regressões feitas acima para erros homoscedásticos, erros heteroscedásticos com variância robusta e erros heteroscedásticos e autocorrelacionados. Lembrando que, para rejeitar o teste, é importante que o valor de F seja no mínimo 10.
+
+```{r}
+
+f = c(summary(lm1)$fstatistic[1],
+  summary(lm2)$fstatistic[1],
+  summary(lm3)$fstatistic[1],
+  summary(lm4)$fstatistic[1],
+  summary(lm5)$fstatistic[1])
+
+names(f) = c("lm1", "lm2", "lm3", "lm4", "lm5")
+
+
+f_hc = c(waldtest(lm1, "mp1_tc", vcov = vcovHC)[2, "F"],
+  waldtest(lm2, "ff4_tc", vcov = vcovHC)[2, "F"],
+  waldtest(lm3, "ed4_tc", vcov = vcovHC)[2, "F"],
+  waldtest(lm4, c("ff4_tc", "ed4_tc"), vcov = vcovHC)[2, "F"],
+  waldtest(lm5, c("mp1_tc", "ff4_tc", "ed2_tc", "ed3_tc", "ed4_tc"), vcov = vcovHC)[2, "F"])
+
+names(f_hc) = c("lm1", "lm2", "lm3", "lm4", "lm5")
+
+
+f_hac = c(waldtest(lm1, "mp1_tc", vcov = vcovHAC)[2, "F"],
+  waldtest(lm2, "ff4_tc", vcov = vcovHAC)[2, "F"],
+  waldtest(lm3, "ed4_tc", vcov = vcovHAC)[2, "F"],
+  waldtest(lm4, c("ff4_tc", "ed4_tc"), vcov = vcovHAC)[2, "F"],
+  waldtest(lm5, c("mp1_tc", "ff4_tc", "ed2_tc", "ed3_tc", "ed4_tc"), vcov = vcovHAC)[2, "F"])
+
+names(f_hac) = c("lm1", "lm2", "lm3", "lm4", "lm5")
+
+list(homoscedástico = round(f, 2), heteroscedástico = round(f_hc, 2), 
+     heterocedásticos_autocorrelacionado = round(f_hac, 2))
+
+
+```
+Agora, igual o paper faz, também iremos colocar NA nos primeiros p = 12 valores na série de instrumentos e observar o choque que a taxa de um ano tem sobre as outras variáveis:
+
+
+```{r}
+
+df = df %>% filter(date >= "1991-01-01" & date <= "2012-06-01")
+dfvar = df[, c("logip", "logcpi", "gs1", "ebp")]
+var = VAR(dfvar, p = 12, type = "const")
+
+ff4 = dfiv$ff4_tc
+totalNA = ff4 %>% na.omit() %>% as.vector() %>% length()
+total = length(ff4)
+ff4[1:12] = NA
+
+shock = externalinstrument(var, ff4, "gs1")
+shock
+
+```
+
+Também podemos escrever o VAR na forma de média móvel para poder fazer o gráfico das séries:
+
+```{r}
+
+MA = Phi(var, 50)
+irf_proxy = apply(MA, 3, function(x) x %*% shock)
+irf_proxy = as.data.frame(t(irf_proxy))
+
+colnames(irf_proxy) = names(shock)
+irf_proxy = mutate(irf_proxy, horizon = 0:50)
+irf_proxy = gather(irf_proxy, key = variable, value = response, -horizon)
+ggplot(irf_proxy, aes(x = horizon, y = response, group = variable, col = variable)) +
+  geom_line() +
+  geom_hline(yintercept = 0) +
+  facet_wrap( ~ variable, scales = "free") +
+  theme_bw()
+
+
+
+```
+
+Depois disso, pode-se adicionar spread de mortgage e spread de papéis comerciais:
+
+```{r}
+
+dfvar2 = df[, c("logip", "logcpi", "gs1", "ebp", "mortg_spread_m", "cp3m_spread_m")]
+var2 = VAR(dfvar2, p = 12, type = "const")
+
+shock2 = externalinstrument(var2, ff4, "gs1")
+
+MA = Phi(var2, 50)
+irf_proxy2 = apply(MA, 3, function(x) x %*% shock2)
+irf_proxy2 = as.data.frame(t(irf_proxy2))
+
+colnames(irf_proxy2) = names(shock2)
+irf_proxy2 = mutate(irf_proxy2, horizon = 0:50)
+irf_proxy2 = gather(irf_proxy2, key = variable, value = response, -horizon)
+ggplot(irf_proxy2, aes(x = horizon, y = response, group = variable, col = variable)) +
+  geom_line() +
+  geom_hline(yintercept = 0) +
+  facet_wrap( ~ variable, scales = "free") +
+  theme_bw()
+
+
+
+```
+Como é possível ver, a taxa de um ano tem efeito positivo sobre o spread de mortgage e sobre o spread comercial e a inclusão dessas variáveis não altera o sinal do efeito das outras variáveis, mas sim sua intensidade.

@@ -1,0 +1,301 @@
+---
+title: "Exercício Aplicado 1"
+output:
+  word_document: default
+date: "2022-08-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importação dos Dados
+
+Primeiramente, é necessário importar as bases de dados para poder gerar o modelo VAR e estimar o VAR estrutural por meio das restrições de longo prazo igual o paper citado. A base de dados é
+
+```{r readxl}
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(vars)
+```
+
+```{r}
+df = read_excel("C:/Users/vfxbl/OneDrive/Área de Trabalho/data_ea1.xlsx")
+df
+```
+
+Porém, deve-se realizar o VAR para duas amostras diferentes. A primeira amostra a ser considerada é a base completa, com dados do segundo trimestre de 1948 até o primeiro trimestre de 2020. Porém, também deve considerar a mesma base para dados antes do último trimestre 1987, que foi o considerado pelo paper de Blanchard e Quah.
+
+```{r}
+df_parte = df %>% filter(dates <= 1987.75)
+```
+
+# Limpeza das variáveis
+
+O grande problema nos dados a serem considerados é que o desemprego tem uma tendência positiva ao longo do tempo, o que parece ter uma tendência de longo prazo. Para isso, é possível regredir a variável de desemprego em uma tendência linear e retirar os resíduos, pois eles terão um efeito limpo e sem tendência. Fazemos isso para as duas amostras.
+
+```{r}
+
+df$unemp_t = lm(df$unemp ~ 1 + seq(1:length(df$unemp)))$residuals
+
+
+```
+
+Outro problema é que o PIB tem duas tendências durante os períodos, uma antes do terceiro trimestre de 1973 e outro depois, pois essa variável tinha uma tendência maior antes de ocorrer o choque do petróleo. Para isso, é retirada a média da amostra em cada uma dessas subamostras e depois juntá-las novamente na variável limpa. Fazemos isso para as duas amostras
+
+```{r}
+
+pib1 = df %>% filter(dates <= 1973.75)
+pib2 = df %>% filter(dates > 1973.75)
+
+df$pib = c(pib1$dgnp - mean(pib1$dgnp), pib2$dgnp - mean(pib2$dgnp))
+
+df_parte = df %>% filter(dates <= 1987.75)
+
+df_parte$unemp_tparte = lm(df_parte$unemp ~ 1 + seq(1:length(df_parte$unemp)))$residuals
+
+```
+
+Agora, é possível verificar como as séries se comportam
+
+```{r}
+par(mfrow = c(2,2))
+plot(y = df$dgnp, x = df$dates, type = "l", ylim = range(df$dgnp, df$pib),
+     ylab = "", xlab = "", main = "PIB")
+plot(y = df$pib, x = df$dates, type = "l", ylim = range(df$dgnp, df$pib),
+     ylab = "", xlab = "", main = "PIB Ajustado")
+plot(y = df$unemp, x = df$dates, type = "l", ylim = range(df$unemp, df$unemp_t),
+     ylab = "", xlab = "", main = "Desemprego")
+plot(y = df$unemp_t, x = df$dates, type = "l", ylim = range(df$unemp, df$unemp_t),
+     ylab = "", xlab = "", main = "Desemprego Ajustado")
+
+```
+
+# VAR Irrestrito
+
+Após as variáveis estarem estacionárias, é possível montar um modelo VAR na forma reduzida para estimar seus parâmetros. Esse é o primeiro passo para chegar em um VAR na forma estrutural e é considerado o mais simples. Assim como o paper de Blanchard e Quah, aqui são utilizados 8 defasagens.
+
+```{r}
+
+var1 = VAR(cbind(df$pib, df$unemp_t), p = 8, type = "none")
+var2 = VAR(cbind(df$unemp_t, df$pib), p = 8, type = "none")
+
+summary(var1)
+
+```
+
+# Identificação do Modelo
+
+Nessa etapa, o modelo VAR deve ser identificado por meio de dois diferentes métodos, que são as restrições de curto e de longo prazo. As restrições de curto prazo são a decomposição de Cholesky, também chamadas de identificação recursiva, enquanto as de longo prazo são o método de Blanchard e Quah.
+
+Primeiramente, utiliza-se o método de Cholesky utilizando uma matriz diagonal inferior com o argumento de que os choques de oferta não têm efeito sobre o produto, mas têm efeito sobre o desemprego, enquanto os de demanda têm efeito em ambos.
+
+```{r}
+
+amat = matrix(c(NA,NA,0,NA), 2)
+
+cholesky = SVAR(var1, Amat = amat)
+cholesky
+
+```
+
+Com base nessa matriz de Cholesky, é possível então calcular a função resposta impulso das variáveis de PIB e desemprego (u) acumuladas e não acumuladas.
+
+```{r}
+
+
+irf = irf(cholesky, n.ahead = 40, cumulative = F, boot = T, ci = 0.9)
+irfc = irf(cholesky, n.ahead = 40, cumulative = T, boot = T, ci = 0.9)
+
+```
+
+E, em seguida, também é possível plotar essas funções resposta impulso (IRF) de cada um dos choques em cada uma dessas variáveis, no caso, com a função não acumulada.
+
+```{r}
+par(mfrow = c(2,2))
+
+plot(irf$irf$y1[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF de choque de PIB na variável PIB",
+     ylim = range(irf$irf$y1[,"y1"], irf$Lower$y1[,"y1"], irf$Upper$y1[,"y1"]))
+abline(h = 0)
+
+plot(irf$irf$y1[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF de choque de PIB na variável u",
+     ylim = range(irf$irf$y1[,"y2"], irf$Lower$y1[,"y2"], irf$Upper$y1[,"y2"]))
+abline(h = 0)
+
+plot(irf$irf$y2[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF de choque de u na variável PIB",
+     ylim = range(irf$irf$y2[,"y1"], irf$Lower$y2[,"y1"], irf$Upper$y2[,"y1"]))
+abline(h = 0)
+
+plot(irf$irf$y2[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF de choque de u na variável u",
+     ylim = range(irf$irf$y2[,"y2"], irf$Lower$y2[,"y2"], irf$Upper$y2[,"y2"]))
+abline(h = 0)
+
+
+```
+
+# Restrições de Longo Prazo (Blanchard e Quah)
+
+Aqui, nós interpretamos distúrbios em duas situações: efeitos permanentes e temporários, de modo que interpretamos efeitos permanentes como resultados da oferta e temporários como de demanda. Para chegar no caso de longo prazo, é importante abrir o modelo VAR em uma média móvel infinita (é possível fazer isso pois as variáveis são estacionárias).
+
+No longo prazo, a restrição utilizada é a mesma, com uma matriz triangular superior, mas a formação dessa matriz é diferente e, portanto, também são os resultados. Como agora a matriz triangular superior é a que acompanha somente os resíduos (pois é uma média móvel), assume-se que a soma dos coeficientes é zero, o que é mais aceitável do que dizer que todos são zero igual no caso anterior. Para fazer o modelo:
+
+```{r}
+
+svar = BQ(var1)
+summary(svar)
+
+```
+
+Agora, também calculamos a IRF.
+
+```{r}
+
+irfbq = irf(svar, n.ahead = 40, cumulative = F, boot = T, ci = 0.9)
+irfcbq = irf(svar, n.ahead = 40, cumulative = T, boot = T, ci = 0.9)
+
+```
+
+E os gráficos são:
+
+```{r}
+
+par(mfrow = c(2,2))
+
+plot(irfcbq$irf$y1[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Oferta no PIB",
+     ylim = range(irfcbq$irf$y1[,"y1"], irfcbq$Lower$y1[,"y1"]-0.1, irfcbq$Upper$y1[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y1[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Oferta em u",
+     ylim = range(irfbq$irf$y1[,"y2"], irfbq$Lower$y1[,"y2"], irfbq$Upper$y1[,"y2"]))
+abline(h = 0)
+
+plot(irfcbq$irf$y2[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Demanda no PIB",
+     ylim = range(irfcbq$irf$y2[,"y1"], irfcbq$Lower$y2[,"y1"], irfcbq$Upper$y2[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y2[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Demanda em u",
+     ylim = range(irfbq$irf$y2[,"y2"], irfbq$Lower$y2[,"y2"], irfbq$Upper$y2[,"y2"]))
+abline(h = 0)
+
+```
+
+Nesse caso, são calculadas a IRF acumulada (IRFC) para os efeitos sobre o PIB para entender o efeito dos choques ao longo de todos os períodos. A decomposição da variância é:
+
+```{r}
+
+plot(fevd(svar, n.ahead = 40))
+
+
+```
+
+# Utilizando a amostra do artigo BQ
+
+Por fim, utiliza-se a amostra reduzida do artigo:
+
+```{r}
+
+var1 = VAR(cbind(df_parte$pib, df_parte$unemp_tparte), p = 8, type = "none")
+var2 = VAR(cbind(df_parte$unemp_tparte, df_parte$pib), p = 8, type = "none")
+
+summary(var1)
+
+```
+
+Primeiramente, a decomposição de Cholesky:
+
+```{r}
+
+cholesky = SVAR(var1, Amat = amat)
+cholesky
+
+
+irfbq = irf(svar, n.ahead = 40, cumulative = F, boot = T, ci = 0.9)
+irfcbq = irf(svar, n.ahead = 40, cumulative = T, boot = T, ci = 0.9)
+
+
+par(mfrow = c(2,2))
+
+
+plot(irfcbq$irf$y1[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Oferta no PIB",
+     ylim = range(irfcbq$irf$y1[,"y1"], irfcbq$Lower$y1[,"y1"]-0.1, irfcbq$Upper$y1[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y1[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Oferta em u",
+     ylim = range(irfbq$irf$y1[,"y2"], irfbq$Lower$y1[,"y2"], irfbq$Upper$y1[,"y2"]))
+abline(h = 0)
+
+plot(irfcbq$irf$y2[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Demanda no PIB",
+     ylim = range(irfcbq$irf$y2[,"y1"], irfcbq$Lower$y2[,"y1"], irfcbq$Upper$y2[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y2[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Demanda em u",
+     ylim = range(irfbq$irf$y2[,"y2"], irfbq$Lower$y2[,"y2"], irfbq$Upper$y2[,"y2"]))
+abline(h = 0)
+
+
+```
+
+E, para o longo prazo:
+
+```{r}
+
+svar = BQ(var1)
+summary(svar)
+
+irfbq = irf(svar, n.ahead = 40, cumulative = F, boot = T, ci = 0.9)
+irfcbq = irf(svar, n.ahead = 40, cumulative = T, boot = T, ci = 0.9)
+
+par(mfrow = c(2,2))
+
+plot(irfcbq$irf$y1[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Oferta no PIB",
+     ylim = range(irfcbq$irf$y1[,"y1"], irfcbq$Lower$y1[,"y1"], irfcbq$Upper$y1[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y1[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Oferta em u",
+     ylim = range(irfbq$irf$y1[,"y2"], irfbq$Lower$y1[,"y2"], irfbq$Upper$y1[,"y2"]))
+abline(h = 0)
+
+plot(irfcbq$irf$y2[,"y1"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRFC - Choque de Demanda no PIB",
+     ylim = range(irfcbq$irf$y2[,"y1"], irfcbq$Lower$y2[,"y1"], irfcbq$Upper$y2[,"y1"]))
+abline(h = 0)
+
+plot(irfbq$irf$y2[,"y2"], ylab = "", xlab = "Quarter", type = "l", lwd = 2,
+     main = "IRF - Choque de Demanda em u",
+     ylim = range(irfbq$irf$y2[,"y2"], irfbq$Lower$y2[,"y2"], irfbq$Upper$y2[,"y2"]))
+abline(h = 0)
+
+```
+
+E a decomposição da variância:
+
+```{r}
+
+plot(fevd(svar, n.ahead = 40))
+
+```
+
+# Interpretações do Modelo
+
+Primeiramente, analisando a amostra completa com todos os dados até 2020, percebe-se primeiro que um choque positivo de demanda causa um efeito positivo no PIB no curto prazo, tanto no caso de estimação de Cholesky quanto na estimação de longo prazo. A diferença entre as duas são os efeitos e suas durações: enquanto em Cholesky o efeito é bem alto e sua duração curta, no método de BQ é um pouco demorado e ele estabiliza rápido em um efeito de longo prazo, sem grandes distorções para períodos próximos.
+
+Enquanto isso, também se percebe um efeito negativo de choques de demanda e de oferta sobre o desemprego, pois eles causam uma maior atividade econômica, o que faz com que se gere um menor desemprego. Isso ocorre em sintomia com o produto, visto que o desemprego cai conforme o produto aumenta, e isso está de acordo com o item anterior.
+
+Em relação à decomposição da variância, o método de estimação de longo prazo com amostra inteira mostra uma grande participação dos choques de oferta sobre a variância do PIB, enquanto choques de demanda não têm tanto efeito assim sobre o produto. Isso indica que o produto tende a movimentar mais conforme os choques são de oferta, pois seu efeito é maior sobre o produto.
+
+O que é muito significativo perceber é que, da amostra reduzida do paper para a amostra completa, a variância ganha força, tanto que o efeito na decomposição da variância é maior. Algo também evidente é que choques de oferta positivos normalmente aumentam o desemprego imediatamente, porém no longo prazo o reduzem para atingir o nível inicial.
