@@ -1,0 +1,481 @@
+---
+title: "Entrega Parcial Projetos 3 - Esthevão Marttioly"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+
+# Obtenção dos dados:
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, include = FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(tstools)
+library(sidrar)
+library(zoo)
+library(scales)
+library(gridExtra)
+library(timetk)
+library(knitr)
+library(BETS)
+library(tsibble)
+library(ggplot2)
+library(reshape2)
+library(formattable)
+
+```
+```{r, include = FALSE}
+
+# PIB sem ajuste sazonal (em nível e variação interanual)
+
+pib = get_sidra(api = "/t/1620/n1/all/v/all/p/all/c11255/90707/d/v583%202") %>%
+  mutate(date = as.yearqtr(`Trimestre (Código)`, format = "%Y%q")) %>%
+  mutate(VariaçãoAnual = 100*(Valor/lag(Valor, 4) - 1)) %>%
+  select(date, Valor, VariaçãoAnual) %>%
+  rename(PIB = Valor)
+
+# PIB com ajuste sazonal (em nível e variação)
+
+pibsazonal = get_sidra(api = "/t/1621/n1/all/v/all/p/all/c11255/90707/d/v584%202") %>%
+  mutate(date = as.yearqtr(`Trimestre (Código)`, format = "%Y%q")) %>%
+  mutate(Variação = 100*(Valor/lag(Valor, 1) - 1)) %>%
+  select(date, Valor, Variação) %>%
+  rename(PIBSazonal = Valor)
+
+PIB = left_join(pib, pibsazonal, by = "date") %>% drop_na()
+remove(pib, pibsazonal)
+
+```
+```{r, include = FALSE}
+
+componentes = get_sidra(api = '/t/1620/n1/all/v/all/p/all/c11255/90687,90691,90696,90707,93404,93405,93406,93407,93408/d/v583%202') %>%
+  mutate(date = as.yearqtr(`Trimestre (Código)`, format = '%Y%q')) %>%
+  select(date, `Setores e subsetores`, Valor) %>%
+  pivot_wider(id_cols = date, names_from = `Setores e subsetores`, values_from = Valor) %>%
+    rename(`Consumo do Governo` = `Despesa de consumo da administração pública`)
+
+compsazonal = get_sidra(api = '/t/1621/n1/all/v/all/p/all/c11255/90687,90691,90696,90707,93404,93405,93406,93407,93408/d/v584%202') %>%
+  mutate(date = as.yearqtr(`Trimestre (Código)`, format = '%Y%q')) %>%
+  select(date, `Setores e subsetores`, Valor) %>%
+  pivot_wider(id_cols = date, names_from = `Setores e subsetores`, values_from = Valor) %>%
+    rename(`Consumo do Governo` = `Despesa de consumo da administração pública`)
+
+# Variação (com ajuste sazonal)
+
+variação = ts(compsazonal[, -1], start = c(year(compsazonal$date[1]), 
+                  quarter(compsazonal$date[1])), freq = 4)
+
+variação = compsazonal$date[-c(1)] %>%
+  cbind(100 * (variação/stats::lag(variação, -1) - 1)) %>%
+  as.data.frame() %>%
+  `colnames<-`(colnames(compsazonal)) %>%
+  pivot_longer(-date, names_to = "Variável", values_to = "Valor")
+
+# Variação anual (sem ajuste sazonal)
+
+variaçãoanual = ts(componentes[, -1], start = c(year(componentes$date[1]), 
+                  quarter(componentes$date[1])), freq = 4)
+
+variaçãoanual = componentes$date[-c(1,2,3,4)] %>%
+  cbind(100 * (variaçãoanual/stats::lag(variaçãoanual, -4) - 1)) %>%
+  as.data.frame() %>%
+  `colnames<-`(colnames(componentes)) %>%
+  pivot_longer(-date, names_to = "Variável", values_to = "Valor")
+
+```
+```{r, include = FALSE}
+
+ibc = BETSget(24363, data.frame = TRUE)
+
+ibcsazonal = BETSget(24364, data.frame = TRUE)
+
+ibc = left_join(ibc, ibcsazonal, by = 'date') %>%
+  rename(IBC = value.x, IBCDessazonal = value.y) %>%
+  mutate(Variação = 100*(IBCDessazonal/lag(IBCDessazonal, 1) - 1)) %>%
+  mutate(VariaçãoAnual = 100*(IBC/lag(IBC, 12) - 1))
+
+IBC = ibc %>% gather(Variável, Valor, -date)
+
+```
+```{r, include = FALSE}
+
+names = c('date', 'Receita', 'ReceitaSazonal', 'Volume', 'VolumeSazonal')
+
+pmc = get_sidra(api = '/t/3416/n1/all/v/all/p/all/c11046/40311,40312/d/v564%201,v565%201') %>%
+  mutate(date = parse_date(`Mês (Código)`, format = '%Y%m')) %>%
+  select(`Variável`, date, `Tipos de índice`, Valor) %>%
+  spread(`Variável`, Valor) %>%
+  pivot_wider(id_cols = date, 
+              names_from = 'Tipos de índice', 
+              values_from = c('Índice de receita nominal de vendas no comércio varejista', 
+                              'Índice de volume de vendas no comércio varejista')) %>%
+  `colnames<-`(names) %>%
+  mutate(VarReceita = 100*(ReceitaSazonal/lag(ReceitaSazonal, 1) - 1)) %>%
+  mutate(VarVolume = 100*(VolumeSazonal/lag(VolumeSazonal, 1) - 1)) %>%
+  mutate(VarAnualReceita = 100*(Receita/lag(Receita, 12) - 1)) %>%
+  mutate(VarAnualVolume = 100*(Volume/lag(Volume, 12) - 1))
+
+PMC = pmc %>% gather(Variável, Valor, -date)
+
+
+```
+```{r, include = FALSE}
+
+PIM = get_sidra(api = '/t/3653/n1/all/v/3135/p/all/c544/all/d/v3135%201') %>%
+  mutate(date = parse_date(`Mês (Código)`, format='%Y%m')) %>%
+  select(date, "Seções e atividades industriais (CNAE 2.0)", Valor) %>%
+  spread("Seções e atividades industriais (CNAE 2.0)", Valor)
+
+PIMSazonal = get_sidra(api ='/t/3653/n1/all/v/3134/p/all/c544/all/d/v3134%201') %>%
+  mutate(date = parse_date(`Mês (Código)`, format='%Y%m')) %>%
+  select(date, "Seções e atividades industriais (CNAE 2.0)", Valor) %>%
+  spread("Seções e atividades industriais (CNAE 2.0)", Valor)
+
+pimvariação = ts(PIMSazonal[, -1], start = c(year(PIMSazonal$date[1]), 
+                  month(PIMSazonal$date[1])), freq = 12)
+
+pimvariação = PIMSazonal$date[-c(1)] %>%
+  cbind(100 * (pimvariação/stats::lag(pimvariação, -1) - 1)) %>%
+  as.data.frame() %>%
+  `colnames<-`(colnames(PIMSazonal)) %>%
+  pivot_longer(-date, names_to = "Variável", values_to = "Valor") %>%
+  mutate(date = as.Date.numeric(date))
+
+
+pimvariaçãoanual = ts(PIM[, -1], start = c(year(PIM$date[1]), 
+                  month(PIM$date[1])), freq = 12)
+
+pimvariaçãoanual = PIM$date[-c(1:12)] %>%
+  cbind(100 * (pimvariaçãoanual/stats::lag(pimvariaçãoanual, -12) - 1)) %>%
+  as.data.frame() %>%
+  `colnames<-`(colnames(PIM)) %>%
+  pivot_longer(-date, names_to = "Variável", values_to = "Valor") %>%
+  mutate(date = as.Date.numeric(date))
+
+```
+```{r, include = FALSE}
+
+populacao = get_sidra(api = '/t/6022/n1/all/v/606/p/all') %>%
+  mutate(date = parse_date(`Trimestre Móvel (Código)`, format='%Y%m')) %>%
+  select(date, Valor)
+
+names = c("date", 'pnea', 'pea', 'desocupada', 'ocupada', 'pia')
+
+condicao = get_sidra(api='/t/6318/n1/all/v/1641/p/all/c629/all') %>%
+  mutate(date = parse_date(`Trimestre Móvel (Código)`, format = '%Y%m')) %>%
+  select(date, "Condição em relação à força de trabalho e condição de ocupação", Valor) %>%
+  spread("Condição em relação à força de trabalho e condição de ocupação", Valor) %>%
+  `colnames<-`(names)
+
+
+pnad = left_join(populacao, condicao, by = 'date') %>%
+  rename(populacao = Valor) %>%
+  mutate(inativos = populacao - pia,
+         desemprego = desocupada/pea * 100,
+         participacao = pea/pia * 100) %>%
+  select(date, populacao, inativos, pia, pea, pnea, ocupada, desocupada,
+         desemprego, participacao)
+
+PNAD = pnad %>% gather(Variável, Valor, -date)
+
+
+```
+
+# Relatório de Atividade Econômica - Setor de bebidas
+
+## Nível de Atividade Econômica Geral
+
+O nível do Produto Interno Bruto (PIB) encontrou uma recuperação durante
+o ano de 2021 e os primeiros trimestres de 2022. Apesar de essa
+recuperação ser ínfima, houve a recuperação do nível de produto no
+terceiro trimestre de 2021 em relação aos níveis pré-pandêmicos, o que
+evidencia um lento, porém evidente, retorno à produção estipulada
+anteriormente à pandemia, ainda mais evidenciado pelo PIB
+Dessazonalidade, que mostra uma recuperação constante de 0,58% por
+trimestre.
+
+```{r, echo = FALSE}
+
+g1 = filter(PIB, date > '2014 Q1') %>%
+  ggplot(aes(x = date, y = PIB)) +
+  geom_line(size = .8, colour = 'darkblue')+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = '%YQ%q') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 8, face = 'bold'),
+        axis.title.y = element_text(size = 6)) +
+  labs(x = '', y = 'Número Índice', title = 'PIB Sazonalizado')
+
+
+g2 = filter(PIB, date > '2014 Q1') %>%
+  ggplot(aes(x = date, y = PIBSazonal)) +
+  geom_line(size = .8, colour = 'darkblue')+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = '%YQ%q') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 8, face = 'bold'),
+        axis.title.y = element_text(size = 6)) +
+  labs(x = '', y = 'Número Índice', title = 'PIB Dessazonalizado')
+
+g3 = ggplot(PIB, aes(x = date, y = VariaçãoAnual))+
+  geom_bar(stat = 'identity',
+           fill=ifelse(PIB$VariaçãoAnual > 0, 'darkgreen', 'red'),
+           colour = 'black')+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = "%YQ%q") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1),
+        plot.title = element_text(size = 8, face = 'bold'),
+        plot.subtitle = element_text(size = 6, face = 'italic')) +
+  labs(x='', y = '%',
+       title = 'Variação do PIB',
+       subtitle = 'Em relação ao mesmo trimestre do ano anterior')
+
+
+g4 = ggplot(PIB, aes(x = date, y = Variação))+
+  geom_bar(stat = 'identity',
+           fill=ifelse(PIB$Variação > 0, 'darkgreen', 'red'),
+           colour = 'black')+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = "%YQ%q") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1),
+        plot.title = element_text(size = 8, face = 'bold'),
+        plot.subtitle = element_text(size = 6, face = 'italic')) +
+  labs(x='', y = '%',
+       title = 'Variação do PIB Dessazonalizado',
+       subtitle = 'Em relação ao mês anterior')
+
+
+grid.arrange(g1, g2, g3, g4, ncol = 2, nrow = 2)
+remove(g1, g2, g3, g4)
+
+```
+
+Diante disso, essa baixa recuperação teve uma repercussão geral para
+todas os setores da economia, inclusive para o setor de bebidas, que
+sofreu muito pela bandemia visto que a demanda por bebidas alcoólicas
+teve grande diminuição em seu início, inclusive fora probida em algumas
+cidades brasileiras. Nesse sentido, como esse mercado normalmente se
+inclui tanto no setor secundário, quanto no terciário, é possível
+verificar o crescimento ou decrescimento de ambos para verificar a
+evolução desse mercado.
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+
+filter(variaçãoanual, date > '2014 Q1') %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável))+
+  geom_bar(aes(fill = Variável, colour = Variável), stat = 'identity') +
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed')+
+  facet_wrap(~ Variável, scales = 'free') +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        axis.text.x = element_text(size = 6),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8, face = 'italic'))+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 4),
+                  format = "%YQ%q") +
+  labs(x = '', y = '',
+       title = 'Componentes do PIB',
+       subtitle = 'Variação contra o mesmo trimestre do ano anterior (%)')
+
+```
+
+O setor de serviços tem uma perceptível sazonalidade ao longo dos anos
+observada pela variação referente ao mesmo trimestre do ano anterior.
+Além disso, observando a evolução dessas variáveis dessazonalizadas,
+houve um intenso crescimento do setor de serviços após sua queda devido
+à pandemia e, paralelo a isso, as importações de bens e serviços também
+estão em alta no momento, o que pode ser entendido como consequência do
+baixo câmbio presente na atual economia, que resultou da baixa taxa de
+juros colocada pelo Banco Central.
+
+```{r, echo = FALSE}
+
+compsazonal[c("date", "Agropecuária - total", "Indústria - total", "Serviços - total",
+          "Despesa de consumo das famílias", "Importação de bens e serviços (-)")] %>%
+  filter(date > "2021 Q3") %>% rename("Setor" = "date") %>% t() %>%
+  knitr::kable()
+
+```
+
+No começo de 2022, o aumento observado no PIB foi decorrente
+principalmente devido ao setor de serviços, que teve um crescimento
+maior inclusive do que o de importações, decorrente principalmente das
+tentativas do Governo em aumentar o consumo das famílias, por meio de
+liberação do FGTS, antecipação do 13° salário, redução dos impostos
+cobrados e aumento para R\$ 600,00 do Auxílio Brasil.
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+
+compsazonal %>% gather(Variável, Valor, -date) %>%
+  filter(date > '2014 Q1') %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_line(size = .9, aes(colour = Variável), stat = 'identity') +
+  facet_wrap(~ Variável, scales = 'free') +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        axis.text.x = element_text(size = 6),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8, face='italic'))+
+  scale_x_yearqtr(breaks = pretty_breaks(n = 4),
+                  format = "%YQ%q") +
+  labs(x = '', y = '',
+       title = 'Componentes do PIB Dessazonalizado',
+       subtitle = 'Em nível')
+
+```
+
+Diante disso, três índices devem ser focados aqui: importação, serviços
+e indústria, mostrado pelo crescimento de 7,63% das importações, 1,25%
+de serviços e 2,15% da indústria no segundo trimestre do ano. Como se
+pode perceber, o setor de serviços ficou muito mais estagnado no último
+trimestre, principalmente devido à inflação observada de 0,95% no mês de
+setembro e 0,54% em agosto para despesas pessoas, que podem englobar
+serviços também.
+
+Em decorrência disso e de outros fatores, não houve um sinal de melhora
+da atividade econômica nos últimos meses, visto que houve uma diminuição
+no IBC-BR dessazonalizado em -1,13%, índice que funciona como uma proxy
+do PIB e tem periodicidade mensal. Apesar das tentativas do Governo em
+aumentar a atividade econômica, é evidente a estagnação econômica
+decorrente do aumento das importações, cuja principal causa foi a
+apreciação do câmbio frente ao dólar.
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 2}
+
+IBC %>%
+  filter(Variável == 'IBC' | Variável == 'IBCDessazonal') %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_line(aes(colour = Variável), size = .9)+
+  scale_colour_manual(values = c('#336666', 'black')) +
+  scale_x_date(breaks = pretty_breaks(n = 8))+
+  theme(strip.text = element_text(size = 8, face = 'bold')) +
+  labs(x = '', y = 'Índice')
+
+```
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 3}
+
+IBC$Variável = factor(IBC$Variável, levels = unique(IBC$Variável)) 
+
+
+subdata = IBC %>%
+  filter(Variável == 'Variação' | Variável == 'VariaçãoAnual')
+
+labels = as_labeller(c(IBC = 'IBC-Br',
+                       IBCDessazonal = 'IBC-Br Dessazonalizado',
+                       Variação = 'Variação mensal',
+                       VariaçãoAnual = 'Variação referente ao ano anterior'))
+
+IBC %>%
+  filter(date > '2014-01-01') %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_line(size = .9) +
+  geom_hline(data = subdata, aes(yintercept = 0), colour = 'black',
+             linetype = 'dashed') +
+  facet_wrap(~ Variável, scales = "free", labeller = labels) +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 10, face = 'bold')) +
+  labs(x = '', y = 'Índice',
+       title = 'Índice de Nível de Atividade do Banco Central (IBC-Br)')
+
+```
+
+**Atividade Econômica de Bebidas**
+
+Em relação ao comércio de bebidas, é possível analisar índices de
+comércio restrito presentes e sua evolução, principalmente referente à
+receita e ao volume de comércio. Em geral, esses índices tem alta
+ciclicidade, porém observou-se uma melhoria nesses índices no começo do
+ano, com variação positiva de 1,45% para receita e 0,83% no mês de
+janeiro.
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+
+labels = as_labeller(c(VarReceita = "Receita - Variação Mensal",
+                       VarVolume = "Volume - Variação Mensal",
+                       VarAnualReceita = "Receita - Variação Anual",
+                       VarAnualVolume = "Volume - Variação Anual"))
+
+PMC %>%
+  filter(date > '2019-01-01',
+      Variável %in% c("VarReceita", "VarVolume", "VarAnualReceita", "VarAnualVolume")) %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_bar(aes(colour = Variável, fill = Variável), 
+           stat = 'identity')+
+  facet_wrap(~ Variável, scales = 'free', labeller = labels) +
+  scale_fill_manual(values = c('#336666', '#91b8bd', '#336666', '#91b8bd'))+
+  scale_colour_manual(values = c('#336666', '#91b8bd', '#336666', '#91b8bd'))+
+  scale_x_date(breaks = date_breaks('3 month'),
+               labels = date_format("%b/%Y")) +
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed') +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 10, face = 'bold'),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold')) +
+  labs(x = '', y = '',
+       title = "Comércio Varejista",
+       caption = "Fonte: IBGE")
+
+```
+
+Isso mostra uma recuperação desse setor e é um bom indicativo para o
+setor de bebidas também, visto que grande parte do processo de sua
+fabricação é a venda para o consumidor final, que está presente no
+comércio dessas. Entretanto, também é importante verificar a indústria
+de produção, que está também diretamente ligada à oferta desse mercado.
+Em relação ao índice PIM, a fabricação de bebidas teve uma grande queda
+de -4,5% no começo do ano, o que mostra um grande choque negativo de
+oferta nesse setor.
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 3.5}
+
+filter(pimvariação, date > '2014-01-01' &
+         Variável %in% c('1 Indústria geral', 
+                         '2 Indústrias extrativas',
+                         '3 Indústrias de transformação',
+                         "3.11 Fabricação de bebidas")) %>%  
+  ggplot(aes(x = date, y = Valor, colour = Variável))+
+  geom_bar(aes(fill = Variável, colour = Variável), stat='identity')+
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed')+
+  facet_wrap(~ Variável, scales = 'free')+
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        axis.text.x = element_text(size = 6),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8, face = 'italic'))+
+  labs(x = '', y = '',
+       title = 'Produção Industrial',
+       subtitle = 'Variação em relação ao mês anterior (%)')
+
+```
+
+Em relação a isso, é possível então perceber um efervecimento na demanda
+por comércio existente no ano, porém com uma grande diminuição na oferta
+de bebidas pensando na produção industrial, o que gera um descompasso
+existente nesse mercado. Diante disso, é evidente que essa queda na
+oferta de bebidas gerou um aumento na inflação desses bens, visto pelo
+índice IPCA para despesas pessoais de 0,95% no mês de setembro.
+
+Por fim, também é importante ressaltar que houve uma queda no índice de
+desemprego de 9,10% para 8,91% para o mês de setembro e uma melhora
+também no indicador da PEA, de 108.548 para 108.706. A melhora nesses
+indicadores demonstra uma maior possibilidade de entrada de
+trabalhadores no setor de bebidas, o que pode ser positivo para conter a
+queda da produção observada, o que geraria uma maior produção e
+consequentemente reduzir a inflação nesse setor.
+
+```{r, echo = FALSE, fig.height = 2, fig.width = 5}
+
+labels = as_labeller(c(desemprego = "Nível de Desemprego",
+                       pea = "População Economicamente Ativa"))
+
+filter(PNAD, Variável %in% c('desemprego', 'pea')) %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_line(size = .9) +
+  facet_wrap(~ Variável, scales = 'free', labeller = labels) +
+  theme(legend.position = 'none')
+
+```
