@@ -8,7 +8,8 @@ SVAR com Cholesky.Rmd -> Modelo SVAR com solução de Cholesky em R \
 SVAR com Restrição de Sinais.Rmd -> Modelo SVAR com Restrição de Sinais em R \
 VAR Instrumental.Rmd -> Modelo SVAR com solução de instrumentos em R \
 Microeconometria.Rmd -> Trabalho de microeconomia e experimentos em R \
-Diff in Diff.Rmd -> Trabalho de Diferenças em Diferenças em R 
+Diff in Diff.Rmd -> Trabalho de Diferenças em Diferenças em R \
+Estimação IS-PC-MR.R -> Trabalho de Estimar o Modelo de 3 Equações em R
 
 # Treinamentos que eu passei - Python e PDF
 
