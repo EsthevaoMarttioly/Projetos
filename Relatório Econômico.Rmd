@@ -1,5 +1,5 @@
 ---
-title: "Entrega Parcial Projetos 3 - Esthevão Marttioly"
+title: "Entrega Final Projetos 3 - Esthevão Marttioly"
 output: pdf_document
 editor_options: 
   markdown: 
@@ -15,6 +15,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, include = FALSE}
 
 library(tidyverse)
+library(GetBCBData)
+library(rbcb)
 library(lubridate)
 library(tstools)
 library(sidrar)
@@ -28,19 +30,19 @@ library(tsibble)
 library(ggplot2)
 library(reshape2)
 library(formattable)
+library(quantmod)
+library(ecb)
 
 ```
 ```{r, include = FALSE}
 
-# PIB sem ajuste sazonal (em nível e variação interanual)
+# Atividade Econômica
 
 pib = get_sidra(api = "/t/1620/n1/all/v/all/p/all/c11255/90707/d/v583%202") %>%
   mutate(date = as.yearqtr(`Trimestre (Código)`, format = "%Y%q")) %>%
   mutate(VariaçãoAnual = 100*(Valor/lag(Valor, 4) - 1)) %>%
   select(date, Valor, VariaçãoAnual) %>%
   rename(PIB = Valor)
-
-# PIB com ajuste sazonal (em nível e variação)
 
 pibsazonal = get_sidra(api = "/t/1621/n1/all/v/all/p/all/c11255/90707/d/v584%202") %>%
   mutate(date = as.yearqtr(`Trimestre (Código)`, format = "%Y%q")) %>%
@@ -50,6 +52,7 @@ pibsazonal = get_sidra(api = "/t/1621/n1/all/v/all/p/all/c11255/90707/d/v584%202
 
 PIB = left_join(pib, pibsazonal, by = "date") %>% drop_na()
 remove(pib, pibsazonal)
+
 
 ```
 ```{r, include = FALSE}
@@ -66,8 +69,6 @@ compsazonal = get_sidra(api = '/t/1621/n1/all/v/all/p/all/c11255/90687,90691,906
   pivot_wider(id_cols = date, names_from = `Setores e subsetores`, values_from = Valor) %>%
     rename(`Consumo do Governo` = `Despesa de consumo da administração pública`)
 
-# Variação (com ajuste sazonal)
-
 variação = ts(compsazonal[, -1], start = c(year(compsazonal$date[1]), 
                   quarter(compsazonal$date[1])), freq = 4)
 
@@ -76,8 +77,6 @@ variação = compsazonal$date[-c(1)] %>%
   as.data.frame() %>%
   `colnames<-`(colnames(compsazonal)) %>%
   pivot_longer(-date, names_to = "Variável", values_to = "Valor")
-
-# Variação anual (sem ajuste sazonal)
 
 variaçãoanual = ts(componentes[, -1], start = c(year(componentes$date[1]), 
                   quarter(componentes$date[1])), freq = 4)
@@ -123,7 +122,6 @@ pmc = get_sidra(api = '/t/3416/n1/all/v/all/p/all/c11046/40311,40312/d/v564%201,
 
 PMC = pmc %>% gather(Variável, Valor, -date)
 
-
 ```
 ```{r, include = FALSE}
 
@@ -159,7 +157,29 @@ pimvariaçãoanual = PIM$date[-c(1:12)] %>%
   mutate(date = as.Date.numeric(date))
 
 ```
+```{r, include=FALSE}
+
+names = c('date', 'Receita', 'ReceitaSazonal', 'Volume', 'VolumeSazonal')
+
+PMS = get_sidra(api =
+        '/t/6442/n1/all/v/all/p/all/c11046/40311,40312/d/v8676%201,v8677%201') %>%
+  mutate(date = parse_date(`Mês (Código)`, format = '%Y%m')) %>%
+  select(date, "Variável", "Tipos de índice", Valor) %>%
+  pivot_wider(id_cols = date,
+              names_from = c("Variável", "Tipos de índice"),
+              values_from = Valor) %>%
+  `colnames<-`(names) %>%
+  mutate(VarReceira = 100*(ReceitaSazonal/lag(ReceitaSazonal, 1) - 1)) %>%
+  mutate(VarVolume = 100*(VolumeSazonal/lag(VolumeSazonal, 1) - 1)) %>%
+  mutate(VarAnualReceita = 100*(Receita/lag(Receita, 12) - 1)) %>%
+  mutate(VarAnualVolume = 100*(Volume/lag(Volume, 12) - 1))  %>%
+  gather(Variável, Valor, -date) %>% drop_na()
+
+
+```
 ```{r, include = FALSE}
+
+# Trabalho e Emprego
 
 populacao = get_sidra(api = '/t/6022/n1/all/v/606/p/all') %>%
   mutate(date = parse_date(`Trimestre Móvel (Código)`, format='%Y%m')) %>%
@@ -180,14 +200,122 @@ pnad = left_join(populacao, condicao, by = 'date') %>%
          desemprego = desocupada/pea * 100,
          participacao = pea/pia * 100) %>%
   select(date, populacao, inativos, pia, pea, pnea, ocupada, desocupada,
-         desemprego, participacao)
+         desemprego, participacao) %>%
+  mutate(desempregovar = desemprego - lag(desemprego, 1))
 
 PNAD = pnad %>% gather(Variável, Valor, -date)
 
 
 ```
+```{r, include=FALSE}
 
-# Relatório de Atividade Econômica - Setor de bebidas
+# Contas Externas
+
+cambio = gbcbd_get_series(1)
+
+names = c("Receita Conta Capital", "Despesa Conta Capital", "Conta Financeira",
+          "Reservas Internacionais", "Exportações", "Importações")
+
+externo = gbcbd_get_series(id = c(22852, 22853, 22863, 3546, 22705, 22706)) %>%
+  mutate(data = as.Date(ref.date))
+
+externo$variavel = names[match(externo$id.num, c(22852, 22853, 22863, 3546, 22705, 22706))]
+
+externo = externo %>%
+  select(data, value, variavel)
+
+
+```
+```{r, include = FALSE}
+
+# Cenário Internacional
+
+getSymbols(c("FEDFUNDS", "GDP", "CPIAUCNS"), src = "FRED") # Juros, PIB e Preços
+
+GDP = tk_tbl(GDP, preserve_index = T)
+FEDFUNDS = tk_tbl(FEDFUNDS, preserve_index = T)
+CPIAUCNS = tk_tbl(CPIAUCNS, preserve_index = T)
+
+GDP = GDP %>% mutate(Variação = 100*(GDP/lag(GDP) - 1))
+
+CPIAUCNS = CPIAUCNS %>% mutate(Variação = 100*(CPIAUCNS/lag(CPIAUCNS) - 1))
+
+CPIAUCNS = CPIAUCNS %>% mutate(VariaçãoAcum = 100*(CPIAUCNS/lag(CPIAUCNS, 12) - 1))
+
+
+```
+```{r, include=FALSE}
+
+# Política Fiscal
+
+names = c("Dívida Bruta do Governo Geral", "Dívida Líquida do Setor Público")
+
+divida = gbcbd_get_series(c(13762, 4513)) %>%
+  mutate(data = as.Date(ref.date))
+
+divida$variavel = names[match(divida$id.num, c(13762, 4513))]
+
+divida = divida %>%
+  select(data, value, variavel) %>%
+  pivot_wider(id_cols = data, values_from = value, names_from = variavel)
+
+```
+```{r, include=FALSE}
+
+names = c("Resultado Nominal Governo Geral", "Resultado Nominal Setor Público",
+          "Resultado Primário Governo Geral", "Resultado Primário Setor Público")
+
+resultado = gbcbd_get_series(id = c(4007, 4016, 2144, 4144)) %>%
+  mutate(data = as.Date(ref.date))
+
+resultado$variavel = names[match(resultado$id.num, c(4007, 4016, 2144, 4144))]
+
+resultado = resultado %>%
+  select(data, value, variavel) %>%
+  pivot_wider(id_cols = data, values_from = value, names_from = variavel)
+
+
+```
+```{r, include = FALSE}
+
+# Política Monetária e Inflação
+
+ipca = get_sidra(api="/t/7060/n1/all/v/63,2265/p/all/c315/7169,7170,7445,7486,7558,7625,7660,7712,7766,7786/d/v63%202,v2265%202") %>%
+  mutate(data = parse_date(`Mês (Código)`, format = '%Y%m')) %>%
+  rename(atividade = `Geral, grupo, subgrupo, item e subitem`, variavel = `Variável`) %>%
+  select(data, atividade, variavel, Valor)
+
+```
+```{r, include=FALSE}
+
+selic = gbcbd_get_series(432)
+
+selic = selic %>% group_by(month(ref.date), year(ref.date)) %>%
+  summarise(selic = mean(value)) %>%
+  `colnames<-`(c("month", "year", "selic")) %>%
+  mutate(data = as.Date(paste0(year, "-", ifelse(month < 10, paste0(0, month), month), "-01"),
+                        format = "%Y-%m-%d"))
+
+meta = gbcbd_get_series(13521)
+igpm = gbcbd_get_series(189)
+
+
+```
+```{r, include = FALSE}
+
+# ETTJ
+
+# devtools::install_github('msperlin/GetTDData') # retirar o hashtag desses dois para baixar
+# install.packages('GetTDData')
+
+library(GetTDData)
+ettj = get.yield.curve()
+
+
+```
+
+
+# Relatório de Atividade Econômica
 
 ## Nível de Atividade Econômica Geral
 
@@ -196,53 +324,54 @@ o ano de 2021 e os primeiros trimestres de 2022. Apesar de essa
 recuperação ser ínfima, houve a recuperação do nível de produto no
 terceiro trimestre de 2021 em relação aos níveis pré-pandêmicos, o que
 evidencia um lento, porém evidente, retorno à produção estipulada
-anteriormente à pandemia, ainda mais evidenciado pelo PIB
-Dessazonalidade, que mostra uma recuperação constante de 0,58% por
-trimestre.
+anteriormente à pandemia, principalmente quando se analisa o PIB em relação ao mesmo trimestre do ano anterior.
 
-```{r, echo = FALSE}
+Ao que pode ser visto, o PIB, que havia crescido 2,43\% e 3,69\% nos primeiros trimestres do ano em relação ao ano anterior, teve no terceiro trimestre um aumento de 3,58\% em relação ao mesmo trimestre do ano anterior. Esse crescimento parece muito acentuado e positivo, porém, quando é analisado o crescimento mês a mês no PIB dessazonalizado, o crescimento que foi de 1,35\% e 0,98\% nos primeiros trimestres agora foi de 0,40\%. Isso indica que, apesar de o Brasil ter tido uma recuperação frente aos seus níveis na pandemia, esse ainda é um crescimento pequeno e o país não tem indícios de crescer de um modo saudável no longo prazo.
+
+
+```{r, echo = FALSE, warning=FALSE, fig.align='center'}
 
 g1 = filter(PIB, date > '2014 Q1') %>%
   ggplot(aes(x = date, y = PIB)) +
-  geom_line(size = .8, colour = 'darkblue')+
+  geom_line(size = .9, colour = '#336666')+
   scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = '%YQ%q') +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        plot.title = element_text(size = 8, face = 'bold'),
-        axis.title.y = element_text(size = 6)) +
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.title.y = element_text(size = 8)) +
   labs(x = '', y = 'Número Índice', title = 'PIB Sazonalizado')
 
 
 g2 = filter(PIB, date > '2014 Q1') %>%
   ggplot(aes(x = date, y = PIBSazonal)) +
-  geom_line(size = .8, colour = 'darkblue')+
+  geom_line(size = .9, colour = '#336666')+
   scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = '%YQ%q') +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        plot.title = element_text(size = 8, face = 'bold'),
-        axis.title.y = element_text(size = 6)) +
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.title.y = element_text(size = 8)) +
   labs(x = '', y = 'Número Índice', title = 'PIB Dessazonalizado')
 
-g3 = ggplot(PIB, aes(x = date, y = VariaçãoAnual))+
+g3 = ggplot(filter(PIB, date > "2014 Q1"), aes(x = date, y = VariaçãoAnual)) +
   geom_bar(stat = 'identity',
-           fill=ifelse(PIB$VariaçãoAnual > 0, 'darkgreen', 'red'),
-           colour = 'black')+
+           fill = ifelse(filter(PIB, date > "2014 Q1")$VariaçãoAnual > 0,
+                         'darkgreen', 'red')) +
   scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = "%YQ%q") +
-  theme(axis.text.x = element_text(angle = 45, hjust=1),
-        plot.title = element_text(size = 8, face = 'bold'),
-        plot.subtitle = element_text(size = 6, face = 'italic')) +
-  labs(x='', y = '%',
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8)) +
+  labs(x = '', y = '%',
        title = 'Variação do PIB',
        subtitle = 'Em relação ao mesmo trimestre do ano anterior')
 
 
-g4 = ggplot(PIB, aes(x = date, y = Variação))+
+g4 = ggplot(filter(PIB, date > "2014 Q1"), aes(x = date, y = Variação)) +
   geom_bar(stat = 'identity',
-           fill=ifelse(PIB$Variação > 0, 'darkgreen', 'red'),
-           colour = 'black')+
+           fill = ifelse(filter(PIB, date > "2014 Q1")$Variação > 0,
+                         'darkgreen', 'red')) +
   scale_x_yearqtr(breaks = pretty_breaks(n = 10), format = "%YQ%q") +
-  theme(axis.text.x = element_text(angle = 45, hjust=1),
-        plot.title = element_text(size = 8, face = 'bold'),
-        plot.subtitle = element_text(size = 6, face = 'italic')) +
-  labs(x='', y = '%',
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8)) +
+  labs(x = '', y = '%',
        title = 'Variação do PIB Dessazonalizado',
        subtitle = 'Em relação ao mês anterior')
 
@@ -253,26 +382,22 @@ remove(g1, g2, g3, g4)
 ```
 
 Diante disso, essa baixa recuperação teve uma repercussão geral para
-todas os setores da economia, inclusive para o setor de bebidas, que
-sofreu muito pela bandemia visto que a demanda por bebidas alcoólicas
-teve grande diminuição em seu início, inclusive fora probida em algumas
-cidades brasileiras. Nesse sentido, como esse mercado normalmente se
-inclui tanto no setor secundário, quanto no terciário, é possível
-verificar o crescimento ou decrescimento de ambos para verificar a
-evolução desse mercado.
+todas os setores da economia, principalmente para os setores mais afetados pela pandemia, como o setor de serviços e de despesas das famílias, que
+sofreram muito pela pandemia visto que, com o _lockdown_, as famílias tiveram menores gastos com comércio e serviços, o que tinha gerado grande diminuição. Entretanto, como a queda foi grande, sua recuperação também foi, pois, ao analisar o setor de serviços, cresceu 4,12%, 4,74% e 4,48% em relação ao mesmo trimestre do ano anterior e 1,35\%, 1,28\% e 1,08\% mês a mês nos primeiros três trimestres do ano de 2022 respectivamente.
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4, fig.align='center'}
 
 filter(variaçãoanual, date > '2014 Q1') %>%
   ggplot(aes(x = date, y = Valor, colour = Variável))+
   geom_bar(aes(fill = Variável, colour = Variável), stat = 'identity') +
-  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed')+
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed') +
   facet_wrap(~ Variável, scales = 'free') +
   theme(legend.position = 'none',
         strip.text = element_text(size = 7, face = 'bold'),
         axis.text.x = element_text(size = 6),
         plot.title = element_text(size = 10, face = 'bold'),
-        plot.subtitle = element_text(size = 8, face = 'italic'))+
+        plot.subtitle = element_text(size = 8, face = 'italic')) +
   scale_x_yearqtr(breaks = pretty_breaks(n = 4),
                   format = "%YQ%q") +
   labs(x = '', y = '',
@@ -281,19 +406,15 @@ filter(variaçãoanual, date > '2014 Q1') %>%
 
 ```
 
-O setor de serviços tem uma perceptível sazonalidade ao longo dos anos
-observada pela variação referente ao mesmo trimestre do ano anterior.
-Além disso, observando a evolução dessas variáveis dessazonalizadas,
-houve um intenso crescimento do setor de serviços após sua queda devido
-à pandemia e, paralelo a isso, as importações de bens e serviços também
-estão em alta no momento, o que pode ser entendido como consequência do
-baixo câmbio presente na atual economia, que resultou da baixa taxa de
-juros colocada pelo Banco Central.
+Outro setor que também apresentou um grande aumento foi a importação, que havia tido uma grande queda de 3,37\% no começo do ano, porém enfrentou uma rápida recuperação de 8,73\% e 5,76\% no segundo e terceiro trimestre de 2022. Isso pode ser explicado devido à grande adesão das famílias por produtos importados após a pandemia, por exemplo com produtos da Shopee e da Shein, que se tornaram marcas muito renomadas no mercado brasileiro, porém que haviam sofrido uma queda devido ao fim gradual do _lockdown_, que incentivou mais as pessoas a consumirem produtos domésticos (bens e serviços).
+
+Além disso, a importação de bens e serviços também pode ser explicada devido ao baixo câmbio em que a economia se encontrou em 2022, queda resultado do aumento das taxas de juros que serão analisadas mais a fundo posteriormente. Esse aumento em serviços e na importação foi acompanhado por uma queda na agricultura e na indústria no último trimestre, como pode ser observado na tabela posterior, em que variáveis estão dessazonalizadas.
 
 ```{r, echo = FALSE}
 
 compsazonal[c("date", "Agropecuária - total", "Indústria - total", "Serviços - total",
-          "Despesa de consumo das famílias", "Importação de bens e serviços (-)")] %>%
+          "Despesa de consumo das famílias", "Importação de bens e serviços (-)",
+          "Exportação de bens e serviços", "Consumo do Governo")] %>%
   filter(date > "2021 Q3") %>% rename("Setor" = "date") %>% t() %>%
   knitr::kable()
 
@@ -306,7 +427,10 @@ tentativas do Governo em aumentar o consumo das famílias, por meio de
 liberação do FGTS, antecipação do 13° salário, redução dos impostos
 cobrados e aumento para R\$ 600,00 do Auxílio Brasil.
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+Agora, no terceiro trimestre de 2022, as principais variáveis que tiveram um aumento foram formação bruta de capital fixo (2,84\%), consumo do Governo (1,35\%) exportações (3,56\%) e serviços (1,08\%), que contrabalancearam o alto aumento nas importações (5,76\%). Em geral, os aumentos no gasto do Governo e em serviços ocorreram devido às medidas supracitadas devido à proximidade com as eleições, o que já era observado também no segundo trimestre de 2022. Entretanto, investimentos e exportações subirem foram novidades, visto que os juros e o câmbio estão em baixa, então se esperava o efeito contrário, porém é possível assumir que investimentos aumentaram com base no investimento externo causado pela alta de juros, o que também incentivou exportações devido à maior aquisição de capitais.
+
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4, fig.align='center'}
 
 compsazonal %>% gather(Variável, Valor, -date) %>%
   filter(date > '2014 Q1') %>%
@@ -315,9 +439,9 @@ compsazonal %>% gather(Variável, Valor, -date) %>%
   facet_wrap(~ Variável, scales = 'free') +
   theme(legend.position = 'none',
         strip.text = element_text(size = 7, face = 'bold'),
-        axis.text.x = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = 1, angle = 45),
         plot.title = element_text(size = 10, face = 'bold'),
-        plot.subtitle = element_text(size = 8, face='italic'))+
+        plot.subtitle = element_text(size = 8, face='italic')) +
   scale_x_yearqtr(breaks = pretty_breaks(n = 4),
                   format = "%YQ%q") +
   labs(x = '', y = '',
@@ -326,36 +450,37 @@ compsazonal %>% gather(Variável, Valor, -date) %>%
 
 ```
 
-Diante disso, três índices devem ser focados aqui: importação, serviços
-e indústria, mostrado pelo crescimento de 7,63% das importações, 1,25%
-de serviços e 2,15% da indústria no segundo trimestre do ano. Como se
-pode perceber, o setor de serviços ficou muito mais estagnado no último
+Além disso, é evidente que o setor de serviços ficou muito mais estagnado no último
 trimestre, principalmente devido à inflação observada de 0,95% no mês de
-setembro e 0,54% em agosto para despesas pessoas, que podem englobar
-serviços também.
+setembro e 0,54\% em agosto para despesas pessoais, que podem englobar
+serviços também. Com os preços mais altos, normalmente a demanda por esses bens cai, o que explica a queda nesse setor também.
 
 Em decorrência disso e de outros fatores, não houve um sinal de melhora
 da atividade econômica nos últimos meses, visto que houve uma diminuição
-no IBC-BR dessazonalizado em -1,13%, índice que funciona como uma proxy
-do PIB e tem periodicidade mensal. Apesar das tentativas do Governo em
-aumentar a atividade econômica, é evidente a estagnação econômica
-decorrente do aumento das importações, cuja principal causa foi a
-apreciação do câmbio frente ao dólar.
+no IBC-BR dessazonalizado em -1,13\% em agosto, seguido por um aumento de 0,05\% em setembro. Apesar das tentativas do Governo em
+aumentar a atividade econômica, é evidente a atual estagnação econômico que o país enfrenta no curto e no longo prazo.
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 2}
+Isso pode ser resultado de medidas de curto prazo, como contração monetária vista pela alta de juros e aumento desesperado dos gastos públicos pré-eleições, mas também pela falta de reformas necessária para um crescimento de longo prazo. Caso o país não aprove suas reformas tributária, fiscal, administrativa e federativa, além de ter um forte investimento em capital humano e educação, o crescimento sustentável de longo prazo será impossível e o país continuará na situação de crescer pouco ou decrescer.
+
+
+```{r, echo = FALSE, fig.width = 3, fig.height = 2, fig.align='center'}
 
 IBC %>%
   filter(Variável == 'IBC' | Variável == 'IBCDessazonal') %>%
   ggplot(aes(x = date, y = Valor, colour = Variável)) +
   geom_line(aes(colour = Variável), size = .9)+
   scale_colour_manual(values = c('#336666', 'black')) +
-  scale_x_date(breaks = pretty_breaks(n = 8))+
+  scale_x_date(breaks = pretty_breaks(n = 8)) +
   theme(strip.text = element_text(size = 8, face = 'bold')) +
-  labs(x = '', y = 'Índice')
+  labs(x = '', y = 'Índice') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.title.y = element_text(size = 8),
+        legend.position = "none") + labs(title = "IBC-Br e IBC-BR Dessazonalizado")
 
 ```
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 3}
+```{r, echo = FALSE, fig.width = 5, fig.height = 3, fig.align='center'}
 
 IBC$Variável = factor(IBC$Variável, levels = unique(IBC$Variável)) 
 
@@ -373,26 +498,51 @@ IBC %>%
   ggplot(aes(x = date, y = Valor, colour = Variável)) +
   geom_line(size = .9) +
   geom_hline(data = subdata, aes(yintercept = 0), colour = 'black',
-             linetype = 'dashed') +
+             linetype = 'dashed', size = 0.8) +
   facet_wrap(~ Variável, scales = "free", labeller = labels) +
   scale_x_date(breaks = pretty_breaks(n = 6)) +
   theme(legend.position = 'none',
-        strip.text = element_text(size = 10, face = 'bold')) +
+        strip.text = element_text(size = 10, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold')) +
   labs(x = '', y = 'Índice',
        title = 'Índice de Nível de Atividade do Banco Central (IBC-Br)')
 
 ```
 
-**Atividade Econômica de Bebidas**
+## Indústria, Comércio Serviços
 
-Em relação ao comércio de bebidas, é possível analisar índices de
-comércio restrito presentes e sua evolução, principalmente referente à
-receita e ao volume de comércio. Em geral, esses índices tem alta
-ciclicidade, porém observou-se uma melhoria nesses índices no começo do
-ano, com variação positiva de 1,45% para receita e 0,83% no mês de
+Aqui, são analisados os índices PIM, PMC e PMS, cujo último resultado disponível foi de janeiro. Em relação à indústria, janeiro teve uma queda de -2,43\% na indústria geral, -5,16\% nas indústrias extrativas e de -2,21\% nas indústrias de transformação. Essa grande queda também foi observada na variação anual desse índice e isso mostra que, apesar das quedas da pandemia, esse não foi um fator que danificou o setor das indústrias de modo significativo.
+
+Ao que é possível verificar no gráfico, indústria é um setor muito cíclico e tem grande variações ao longo do tempo, o que indica que a queda observada no começo do ano não teve efeitos muito severos na economia e é um fator normal. Ademais, o setor terciário e o primário têm um peso muito maior na composição do PIB do Brasil, então esse setor é normalmente deixado de lado nos investimentos do Governo e dos investidores estrangeiros.
+
+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4, fig.align='center'}
+
+filter(pimvariação, date > '2019-01-01' &
+         Variável %in% c('1 Indústria geral', 
+                         '2 Indústrias extrativas',
+                         '3 Indústrias de transformação',
+                         "3.10 Fabricação de produtos alimentícios")) %>%  
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_bar(aes(fill = Variável, colour = Variável), stat='identity')+
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed')+
+  facet_wrap(~ Variável, scales = 'free') +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 8, face = 'bold'),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8)) +
+  labs(x = '', y = '',
+       title = 'Produção Industrial',
+       subtitle = 'Variação em relação ao mês anterior (%)')
+
+```
+
+Também foi possível verificar índices de comércio restrito e, a partir do gráfico, é possível verificar alta ciclidade ao longo do tempo, sem um padrão de crescimento de longo prazo que indica melhorias no setor de comércio, até porque esse é um setor que dificilmente terá um grande aumento caso a economia continue estagnada, o que realmente ocorre. Em geral, esses índices tem alta ciclicidade, porém observou-se uma melhoria deles no começo do
+ano, com variação positiva de 1,45\% para receita e 0,83% no mês de
 janeiro.
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 4}
+```{r, echo = FALSE, fig.width = 5, fig.height = 4, fig.align='center'}
 
 labels = as_labeller(c(VarReceita = "Receita - Variação Mensal",
                        VarVolume = "Volume - Variação Mensal",
@@ -404,15 +554,11 @@ PMC %>%
       Variável %in% c("VarReceita", "VarVolume", "VarAnualReceita", "VarAnualVolume")) %>%
   ggplot(aes(x = date, y = Valor, colour = Variável)) +
   geom_bar(aes(colour = Variável, fill = Variável), 
-           stat = 'identity')+
+           stat = 'identity') +
   facet_wrap(~ Variável, scales = 'free', labeller = labels) +
-  scale_fill_manual(values = c('#336666', '#91b8bd', '#336666', '#91b8bd'))+
-  scale_colour_manual(values = c('#336666', '#91b8bd', '#336666', '#91b8bd'))+
-  scale_x_date(breaks = date_breaks('3 month'),
-               labels = date_format("%b/%Y")) +
   geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed') +
   theme(legend.position = 'none',
-        strip.text = element_text(size = 10, face = 'bold'),
+        strip.text = element_text(size = 8, face = 'bold'),
         axis.text.x = element_text(angle = 45, hjust = 1),
         plot.title = element_text(size = 10, face = 'bold')) +
   labs(x = '', y = '',
@@ -421,53 +567,39 @@ PMC %>%
 
 ```
 
-Isso mostra uma recuperação desse setor e é um bom indicativo para o
-setor de bebidas também, visto que grande parte do processo de sua
-fabricação é a venda para o consumidor final, que está presente no
-comércio dessas. Entretanto, também é importante verificar a indústria
-de produção, que está também diretamente ligada à oferta desse mercado.
-Em relação ao índice PIM, a fabricação de bebidas teve uma grande queda
-de -4,5% no começo do ano, o que mostra um grande choque negativo de
-oferta nesse setor.
+Em relação aos serviços, a receita e o volume tiveram um aumento nos últimos períodos, o que também está de acordo com o aumento no nível de serviços visto na variação do PIB, porém, como também observado na variação do PIB, serviços teve uma desaceleração no último período e, como mostra o gráfico, normalmente isso ocorre devido à queda de receita e não de volume. Diante disso, é possível que essa variação menor seja decorrente de um menor preço visto no setor de serviços, o que tende a ser bom para o consumidor.
 
-```{r, echo = FALSE, fig.width = 5, fig.height = 3.5}
 
-filter(pimvariação, date > '2014-01-01' &
-         Variável %in% c('1 Indústria geral', 
-                         '2 Indústrias extrativas',
-                         '3 Indústrias de transformação',
-                         "3.11 Fabricação de bebidas")) %>%  
-  ggplot(aes(x = date, y = Valor, colour = Variável))+
-  geom_bar(aes(fill = Variável, colour = Variável), stat='identity')+
-  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed')+
-  facet_wrap(~ Variável, scales = 'free')+
+```{r, echo = FALSE, fig.width = 5, fig.height = 4, fig.align='center'}
+
+labels = as_labeller(c(VarReceira = "Receita - Variação Mensal",
+                       VarVolume = "Volume - Variação Mensal",
+                       VarAnualReceita = "Receita - Variação Anual",
+                       VarAnualVolume = "Volume - Variação Anual"))
+
+PMS %>%
+  filter(date > '2019-01-01',
+      Variável %in% c("VarReceira", "VarVolume", "VarAnualReceita", "VarAnualVolume")) %>%
+  ggplot(aes(x = date, y = Valor, colour = Variável)) +
+  geom_bar(aes(colour = Variável, fill = Variável), 
+           stat = 'identity') +
+  facet_wrap(~ Variável, scales = 'free', labeller = labels) +
+  geom_hline(yintercept = 0, colour = 'black', linetype = 'dashed') +
   theme(legend.position = 'none',
-        strip.text = element_text(size = 7, face = 'bold'),
-        axis.text.x = element_text(size = 6),
-        plot.title = element_text(size = 10, face = 'bold'),
-        plot.subtitle = element_text(size = 8, face = 'italic'))+
+        strip.text = element_text(size = 8, face = 'bold'),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold')) +
   labs(x = '', y = '',
-       title = 'Produção Industrial',
-       subtitle = 'Variação em relação ao mês anterior (%)')
+       title = "Pesquisa Mensal de Serviços",
+       caption = "Fonte: IBGE")
 
 ```
 
-Em relação a isso, é possível então perceber um efervecimento na demanda
-por comércio existente no ano, porém com uma grande diminuição na oferta
-de bebidas pensando na produção industrial, o que gera um descompasso
-existente nesse mercado. Diante disso, é evidente que essa queda na
-oferta de bebidas gerou um aumento na inflação desses bens, visto pelo
-índice IPCA para despesas pessoais de 0,95% no mês de setembro.
-
 Por fim, também é importante ressaltar que houve uma queda no índice de
-desemprego de 9,10% para 8,91% para o mês de setembro e uma melhora
-também no indicador da PEA, de 108.548 para 108.706. A melhora nesses
-indicadores demonstra uma maior possibilidade de entrada de
-trabalhadores no setor de bebidas, o que pode ser positivo para conter a
-queda da produção observada, o que geraria uma maior produção e
-consequentemente reduzir a inflação nesse setor.
+desemprego de 9,10\% para 8,91\% para o mês de setembro e para 8,30\% para outubro e uma melhora
+também no indicador da PEA, de 108.548 para 108.706, porém uma piora em outubro para 108.684. A melhora nesses indicadores demonstra uma melhoria da economia como um todo, o que pode ser decorrência ainda do efeito da reforma trabalhista de 2017 que começou a ter efeitos agora pois a pandemia foi um fenômeno adverso. Além disso, isso também pode ser efeito da diminuição das responsabilidades dos trabalhadores pela reforma da previdência.
 
-```{r, echo = FALSE, fig.height = 2, fig.width = 5}
+```{r, echo = FALSE, fig.height = 2, fig.width = 5, fig.align='center'}
 
 labels = as_labeller(c(desemprego = "Nível de Desemprego",
                        pea = "População Economicamente Ativa"))
@@ -475,7 +607,331 @@ labels = as_labeller(c(desemprego = "Nível de Desemprego",
 filter(PNAD, Variável %in% c('desemprego', 'pea')) %>%
   ggplot(aes(x = date, y = Valor, colour = Variável)) +
   geom_line(size = .9) +
+  scale_colour_manual(values = c('#336666', '#91b8bd')) +
   facet_wrap(~ Variável, scales = 'free', labeller = labels) +
-  theme(legend.position = 'none')
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 8, face = 'bold'),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold')) +
+  xlab("") + ylab("")
 
 ```
+
+## Contas Externas
+
+Nas contas externas, o câmbio mostra historicamente uma tendência muito grande de alta, em que após 2020 houve uma grande desvalorização devido às baixas de juros do período, juntamente com a pandemia, o que afastou capital do Brasil para locais mais seguros e com maior retorno, por exemplo no dólar ou no ouro. Esse quadro está muito alinhado com a política monetária, visto que, após o Banco Central aumentou novamente os juros, o câmbio voltou a cair para um patamar de aproximadamente 5,26\%, muito abaixo do patamar máximo de 5,93\%que o câmbio atingiu em 14/05/2020, no auge da pandemia.
+
+```{r, echo = FALSE, fig.height = 3, fig.width = 3.5, fig.align='center'}
+
+cambio %>% 
+  ggplot(aes(x = ref.date, y = value)) +
+  geom_line(group = 1, color = "#336666", size = 0.9) +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  xlab("") + ylab("") +
+  labs(title = "Câmbio", subtitle = "Comercial de venda") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8))
+
+```
+
+Além disso, as exportações tiveram um grande aumento durante a pandemia e no fim de 2021, enquanto as importações também aumentaram progressivamente durante a pandemia. Algo que pode explicar o aumento das exportações é a desvalorização cambial, que incentiva cada vez mais os exportadores e, por isso, favorece cada vez mais as exportações ocorrerem. Entretanto, durante a pandemia, como dito anteriormente, muitos consumidores descobriram novos _sites_ que valiam a pena e, portanto, a importação de bens de pequenos valores tiveram um grande salto, o que explica o aumento das importações durante esse período.
+
+Nos últimos períodos, por exemplo de setembro para outubro, importações caíram de 34.648,3 para 32.232,6 e exportações de 33.679,6 para 31.339,6 milhões de dólares. Essa queda pode ser explicada pela variação do câmbio e pelas incertezas do que o país será após as eleições, o que causa uma fuga de capital estrangeiro e exportações ficam cada vez mais caras, apesar de o câmbio ter apreciado.
+
+
+```{r, echo = FALSE, fig.align = 'center', fig.height = 3, fig.width = 5}
+
+externo %>%
+  filter(variavel %in% c("Exportações", "Importações"),
+         data > "2017-01-01") %>%
+  ggplot(aes(x = data, y = value, colour = variavel)) +
+  geom_line(aes(colour = variavel), size = 0.9) +
+  scale_x_date(date_labels = "%b-%Y", breaks = "6 month") +
+  scale_colour_manual(values = c('#91b8bd', '#336666')) +
+  theme(legend.position = 'right',
+        strip.text = element_text(size = 7, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.text.x = element_text(angle = 20, hjust = 0.6, size = 8),
+        plot.subtitle = element_text(size = 8, face = 'italic')) +
+  labs(x = '', y = '', colour = "",
+       title = 'Balança Comercial',
+       subtitle = 'U$ Milhões')
+
+```
+
+Em relação às outras contas, é possível perceber que a conta financeira tem uma tendência de ser negativa durante muitos períodos, o que indica que há muito investimento externo, mais do que investimento doméstico nos países estrangeiros, típico de um país emergente. Em geral, conforme a pandemia se alastrou, o investimento externo diminuiu, pois muitos investidores buscaram capital seguro em moedas mais fortes do que o Brasil, porém, como o câmbio se depreciou, essa queda não foi tão grande, exceto em períodos de muita instabilidade como no começo de 2020 no início da pandemia e no início de 2021 com a segunda onda de COVID-19.
+
+Um outro evento que fez cair o investimento foi a Guerra da Ucrânia, em meados de 2022. De setembro para outubro, a conta de capital aumentou de -8.133,6 para -5.674,8 milhões de dólares, provavelmente devido à instabilidade que as eleições deixaram para o Brasil e devido às incertezas do que seria o país para o próximo ano.
+
+Além disso, também é evidente a queda das reservas internacionais seguem caindo, o que pode indicar que partes do câmbio estar subindo pode ser devido às interferências do Banco Central no câmbio, buscando sua apreciação. Isso pode ser em partes uma influência do Governo no Banco Central em busca da reeleição e sem dúvidas tem efeitos adversos para a economia, visto que o país perde suas reservas de segurança contra possíveis crises cambiais e choques de produtividade externos.
+
+
+```{r, echo = FALSE, fig.align = 'center', fig.height = 3.5, fig.width = 5}
+
+externo %>%
+  filter(variavel %in% c("Receita Conta Capital", "Despesa Conta Capital",
+                         "Conta Financeira", "Reservas Internacionais"),
+         data > "2018-01-01") %>%
+  ggplot(aes(x = data, y = value)) +
+  geom_bar(stat = "identity", aes(fill = variavel, colour = variavel)) +
+  facet_wrap(~ variavel, scales = 'free') +
+  scale_x_date(date_labels = "%b-%Y", breaks = "6 month") +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.text.x = element_text(angle = 20, hjust = 0.6, size = 8),
+        plot.subtitle = element_text(size = 8, face = 'italic')) +
+  labs(x = '', y = '',
+       title = 'Contas Externas Brasileiras',
+       subtitle = 'U$ Milhões')
+
+```
+
+## Cenário Internacional
+
+No cenário internacional, o PIB americano apresentou grande queda durante a pandemia e apenas voltou aos seus níveis anteriores em meados de 2021, o que mostra que o COVID-19 teve um grande impacto na economia americana, sem que houvesse uma rápida recuperação da atividade econômica. Além disso, a economia continua crescendo em um ritmo lento porém esperado, visto que já é uma economia desenvolvida. No terceiro trimestre de 2022, teve um crescimento de 1,78\%, semelhante ao Brasil porém ainda maior.
+
+
+```{r, echo = FALSE, fig.height = 2.5, fig.width = 5.5, fig.align='center'}
+
+g1 = GDP %>% 
+  filter(index > "2017-01-01") %>%
+  ggplot(aes(x = index, y = GDP)) +
+  geom_line(color = "#336666", size = 0.9) +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  xlab("") + ylab("") +
+  labs(title = "PIB Americano", subtitle = "U$ Bilhões") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8))
+
+g2 = GDP %>% 
+  filter(index > "2017-01-01") %>%
+  ggplot(aes(x = index, y = Variação)) +
+  geom_bar(fill = "#91b8bd", stat = "identity") +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  xlab("") + ylab("") +
+  labs(title = "Variação do PIB Americano", subtitle = "Variação mensal") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8))
+
+grid.arrange(g1, g2, nrow = 1)
+
+
+```
+
+Na política monetária, o FED constantemente tem aumentado sua taxa de juros, que antes estava na faixa de zero, porém levou um aumento e hoje está em cerca de 4\%, um juros historicamente muito alto para os padrões americanos e internacionais. O principal motivo disso foi a inflação, causada principalmente devido ao choque negativo de oferta da pandemia e do grande aumento da base monetária americano durante esse período, em que muitos economistas acreditavam que não iria gerar inflação, porém o efeito contrário ocorreu.
+
+A inflação americana chegou a 1,37\% em um mês, o que é muito alto para os Estados Unidos, visto que o país não enfrentava uma inflação severa há muito tempo e, por isso, levou a um aumento dos juros imediatamente. O controle da inflação foi bem positivo e, por isso, é possível que o FED volte a diminuir os juros no ano que vem, visto que o PIB americano não cresce há um tempo e há sempre uma tendência de queda de juros nos EUA, visto que sua moeda é forte e não há tendências grandes para inflação no longo prazo. No acumulado, a inflação já chegou a 9.06\% a.a. em junho e hoje está a 7,74\% a.a.
+
+
+```{r, echo = FALSE, fig.height = 2.5, fig.width = 4, fig.align='center', warning=FALSE}
+  
+FEDFUNDS %>% left_join(CPIAUCNS, by = "index") %>%
+  filter(index > "2017-01-01") %>%
+  ggplot(aes(x = index)) +
+  geom_line(color = "#91b8bd", size = 0.9, aes(y = FEDFUNDS)) +
+  geom_line(color = "#336666", size = 0.9, aes(y = VariaçãoAcum)) +
+  geom_hline(yintercept = 2.5, color = "black", linetype = "dashed", size = 0.7) +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  xlab("") + ylab("") +
+  labs(title = "Juros Americano e Inflação",
+       subtitle = "Federal Funds e Inflação Acumulada em 12 meses - % a.a.") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8))
+
+
+```
+
+Além disso, outro fator que impulsionou a inflação foi a Guerra da Ucrânia, visto que o prêmio do petróleo teve um grande aumento internacionalmente e, por os EUA dependerem desse _commodity_, houve também um aumento dos seus preços internos, já que muitos produtos dependem de transportes para sua comercialização. No gráfico acima, a linha de 2,5\% foi colocada pois é a meta de inflação do FED no longo prazo.
+
+
+## Política Fiscal e Contas Públicas
+
+Quanto às contas do Governo Geral e do Setor Público, é possível perceber que a dívida aumentou muito nos últimos períodos, atingindo o ápice de 89\% de dívida bruta em outubro de 2020 e 62,54\% de dívida líquida em dezembro de 2020. Isso pode ser explicado pelo grande aumento do déficit público observado, o qual gera um grande aumento da dívida pública para conseguir financiar o déficit fiscal do período.
+
+Esse aumento da necessidade de financiamento pode ser explicado devido aos gastos que o Governo teve para financiar o Auxílio Brasil e outros gastos de aumento da atividade. No último mês de outubro, a dívida bruta caiu de 77,09\% para 76,80\%, possível melhora devido ao menor déficit no último mês.
+
+
+```{r, echo = FALSE, fig.height = 3, fig.width = 4, fig.align='center'}
+
+divida %>%
+  ggplot() +
+  geom_line(aes(x = data, y = `Dívida Bruta do Governo Geral`,
+                color = "DBGG"), size = .9) +
+  geom_line(aes(x = data, y = `Dívida Líquida do Setor Público`,
+                color = "DLSP"), size = .9) +
+  scale_colour_manual(values = c('#336666', '#91b8bd')) +
+  scale_x_date(date_labels = "%b-%Y", breaks = "8 month") +
+  xlab("") + ylab("") +
+  labs(title = "Indicadores de Dívida Pública",
+       subtitle = "Dívida Bruta e Líquida como % PIB") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8),
+        legend.position = "none")
+
+
+```
+
+Além disso, após o aumento descontrolado do déficit na pandemia, sua tendência foi muito mais descontrolada e com uma tendência mais cíclica e menos certa devido às dificuldades do momento. No momento atual, houve um grande déficit observado em junho, porém com constantes diminuições ao longo do tempo e baixas nos meses de julho e outubro, resultado provavelmente devido à alta dívida pública crescente que o Governo devia diminuir.
+
+
+```{r, echo = FALSE, fig.height = 3, fig.width = 4, fig.align='center'}
+
+resultado %>%
+  filter(data >= "2013-01-01") %>%
+  ggplot() +
+  geom_line(aes(x = data, y = `Resultado Primário Governo Geral`/1000,
+                color = "Déficit Primário"), size = .9) +
+  geom_line(aes(x = data, y = `Resultado Nominal Governo Geral`/1000,
+                color = "Déficit Nominal"), size = .9) +
+  scale_colour_manual(values = c('#336666', '#91b8bd')) +
+  scale_x_date(date_labels = "%b-%Y", breaks = "8 month") +
+  xlab("") + ylab("") +
+  labs(title = "Déficit do Governo Geral",
+       subtitle = "Déficit Nominal e Primário - R$ Bilhões") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8),
+        legend.position = "none")
+
+
+```
+
+## Política Monetária, Inflação e Juros
+
+Em relação ao índice de inflação, esse índice mostra o cenário de alta de inflação que a economia enfrentou durante a pandemia, uma inflação que 1,62\% para o mês de março, o que é um índice muito grande e mostrou um grande medo que a população sentiu referente a uma possível hiperinflação, visto o cenário que o país se insere. Após isso, foi possível verificar uma alta na taxa de juros, que subia em cada reunião do COPOM após a baixa de 2% no ano de 2020.
+
+Entretanto, conforme a oferta agregada da economia diminuiu com a pandemia e a demanda foi aumentado devido ao gasto do Governo, houve uma pressão de aumento de inflação, que resultou em um nível aproximado de 10,17\% calculado por meio da soma dos índices mensais. Diante dessa alta inflação, a reação do Banco Central foi demorada, ele começou a aumentar os juros apenas no fim de 2021, o que mostrou grandes problemas e uma inflação grande até o começo de 2022.
+
+Outro efeito do aperto monetário foi a diminuição do câmbio decorrente do aumento do investimento externo atraído pela alta de juros, o que antes era visto o contrário devido ao alto câmbio ocasionado também pela baixa de juros evidenciada. Ainda, como é possível ver no gráfico, um aumento no juros é acompanhado por um aumento da inflação, assim como um juros baixo tem como efeito uma inflação alta.
+
+
+```{r, echo = FALSE, fig.height = 3, fig.width = 4, fig.align='center'}
+
+ipca %>% filter(variavel == "IPCA - Variação acumulada em 12 meses",
+                atividade == "Índice geral") %>% drop_na() %>%
+  select(data, Valor) %>% left_join(selic, by = "data") %>%
+  ggplot(aes(x = data)) +
+  geom_line(aes(y = Valor), color = "#91b8bd", size = 0.9) +
+  geom_line(aes(y = selic), color = "#336666", size = 0.9) +
+  scale_x_date(breaks = pretty_breaks(n = 6)) +
+  xlab("") + ylab("") +
+  labs(title = "Taxa Selic e IPCA Acumulado", subtitle = "Definida pelo Banco Central") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8))
+
+```
+
+Após as pressões de alta de juros vistas, a inflação começou a reduzir em moedos de 2022, até mesmo chegando na deflação para alguns períodos e itens vistos na inflação. Os principais itens afetados com deflação foram habitação, transportes e comunicação. A habitação sofreu um grande aumento de até 15,45\% no nível da inflação em novembro de 2021, porém o setor que mais sofreu aumentos foi o de transporte, que chegou até em uma alta de 21,97\% em novembro mas teve vários meses de alta. A deflação mostra o quanto esses setores são elásticos e têm grande variação com a taxa de juros, o que faz crer que são mercados mais voláteis.
+
+Por meio de um maior juros, fica menos rentável investir no setor imobiliário e ir para a renda fixa, o que faz os preços caírem, visto que a demanda por moradias é menor. Quanto à comunicação, é possível que a alta de juros aumentou o custo de financiamento de celulares, o que fez com que consumissem menos e diminuísse os preços. E, quanto aos transportes, o principal efeito foi devido à redução dos impostos sobre a gasolina impostos pelo imposto.
+
+
+```{r, echo = FALSE, fig.align = 'center'}
+
+ipca %>%
+  filter(variavel == "IPCA - Variação mensal", data > "2020-01-01") %>%
+  ggplot(aes(x = data, y = Valor, colour = atividade)) +
+  geom_bar(aes(colour = atividade, fill = atividade), stat = 'identity') +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed", size = 0.7) +
+  facet_wrap(~ atividade, scales = 'free') +
+  scale_x_date(date_labels = "%b-%Y", breaks = "6 month") +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.text.x = element_text(angle = 20, hjust = 0.6, size = 8),
+        plot.subtitle = element_text(size = 8, face = 'italic')) +
+  labs(x = '', y = '',
+       title = 'Inflação',
+       subtitle = 'Variação mensal (% a.a.)')
+
+```
+
+Como possível perceber no próximo gráfico de acumulação em 12 meses que, apesar da baixa inflação ou deflação, a inflação acumulada continou alta, o que mostra que os efeitos da pandemia foram bem severos e não voltaram ao patamar original pré-pandêmico. Apenas para alguns setores que o nível acumulado diminuiu, por exemplo em habitação e comunicação.
+
+
+```{r, echo = FALSE, fig.align='center'}
+
+ipca %>% filter(variavel == "IPCA - Variação acumulada em 12 meses") %>% drop_na() %>%
+ggplot(aes(x = data, y = Valor, fill = atividade)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45 ,hjust = 1)) +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed", size = 0.9) +
+  facet_wrap(~ atividade, scales = 'free') +
+  scale_x_date(date_labels = "%b-%Y", breaks = "6 month") +
+  theme(legend.position = 'none',
+        strip.text = element_text(size = 7, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold'),
+        axis.text.x = element_text(angle = 20, hjust = 0.6, size = 8),
+        plot.subtitle = element_text(size = 8, face = 'italic')) +
+  labs(x = '', y = '',
+       title = 'Inflação', subtitle = 'Variação acumulada (% a.a.)')
+
+
+```
+
+
+Além disso, apesar do erro do Banco Central em demorar a subir os juros, a meta de inflação é decrescente ano após ano, com uma baixa de 3,5\% para o ano de 2022, o que indica que o órgão está mais inclinado a aumentar os juros a fim de diminuir a inflação. Os desvios da meta que a inflação toma mostra que muitas vezes o Banco Central erra e deixa a garantir a credibilidade que busca.
+
+
+```{r, echo=FALSE, fig.align='center'}
+
+meta %>% select(ref.date, value) %>% mutate(ref.date = year(ref.date)) %>%
+  rename("Data" = "ref.date", "Meta" = "value") %>% t() %>% knitr::kable()
+
+
+```
+
+Também é possível medir a inflação por meio do IGP-M, que mostra resultados parecidos de alta de inflação no ano de 2021 e começo de 2022 junto com uma atual deflação, porém, como o IGP-M varia também com o preço de _commodities_ e estas estavam em alta durante 2022 devido à Guerra da Ucrânia, houve um grande aumento nesse índice apesar de os preços do consumidor não terem aumentado tanto assim, por isso há valores como 4,13\% no mês de setembro de 2020.
+
+
+```{r, echo = FALSE, fig.height = 3, fig.width = 4, fig.align='center'}
+
+
+igpm %>% filter(ref.date > "2020-01-01") %>%
+  ggplot(aes(x = ref.date, y = value)) +
+  geom_bar(stat = "identity", fill = '#336666') +
+  scale_x_date(date_labels = "%b-%Y", breaks = "8 month") + 
+  xlab("") + ylab("") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed", size = 0.8) +
+  labs(title = "IGP-M - Índice Geral de Preços do Mercado") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8),
+        legend.position = "none")
+
+```
+
+Por fim, a Estrutura a Termo da Taxa de Juros (ETTJ) está invertida e com uma grande inclinação e curvatura, indicado pelo alto e negativo _spread_ observado na taxa de juros. Essa característica indica um grande sinal de crise e de descredibilidade do Banco Central, pois o mercado não reagiu ao aumento dos juros e continua com baixos juros de longo prazo, enquanto os juros de curto estão cada vez maiores a fim de controlar a inflação.
+
+Diante disso, como o Banco Central está sem credibilidade e o mercado continua com expectativas de baixos juros, o provável sinal para o próximo ano é uma grave recessão, visto que a autoridade monetária não terá mais poder para controlar inflação e, com o baixo crescimento que o país enfrenta há uma década, o cenário mais provável é o de uma estagflação, em que os gastos públicos não param de aumentar e a economia apenas reage nominalmente, sem retornos reais evidentes.
+
+
+```{r, echo = FALSE, fig.height = 2.5, fig.width = 7, fig.align='center'}
+
+labels = as_labeller(c(implicit_inflation = "Inflação Implícita",
+                       nominal_return = "Retorno Nominal",
+                       real_return = "Retorno Real"))
+
+ettj %>%
+  ggplot(aes(x = ref.date, y = value)) +
+  geom_line(size = 0.9, colour = "#336666") +
+  labs(title = "Estrutura a Termo da Taxa de Juros",
+       subtitle = "Curva de Juros para Brasil") + xlab("") + ylab("") +
+  facet_wrap(~ type, scales = "free", labeller = labels) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 8, face = 'bold'),
+        plot.title = element_text(size = 10, face = 'bold'),
+        plot.subtitle = element_text(size = 8),
+        legend.position = "none")
+
+```
+
+Além disso, com a PEC de transição do novo presidente eleito, a tendência é clara: aumento dos gastos públicos e do déficit fiscal, seguido por um aumento provável da inflação sem muito controle pelo Banco Central. Além disso, como o déficit aumenta, é provável que a dívida pública cresça exponencialmente, ainda mais evidenciado por um cenário de alta da taxa de juros e baixo crescimento que o país se encontra, o que pressiona ainda mais o aumento desgovernado da dívida.
+
